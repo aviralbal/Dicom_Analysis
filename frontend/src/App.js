@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 
-const BACKEND_URL = "https://automation-backend-qd96qvdda-aviral-bals-projects.vercel.app "; // Change this after deployment
+const BACKEND_URL = "https://automation-frontend-cnvcxbjeq-aviral-bals-projects.vercel.app"; // Change this after deployment
 
 function App() {
     const [message, setMessage] = useState("");
