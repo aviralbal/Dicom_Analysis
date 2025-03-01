@@ -21,9 +21,9 @@ app.add_middleware(
     allow_headers=["*"],  # Allow all headers
 )
 
-# Define Upload Folder
+# Define Upload and Output Folders
 UPLOAD_FOLDER = "uploads"
-OUTPUT_FOLDER = "outputs"  # Folder to store generated images
+OUTPUT_FOLDER = "outputs"
 Path(UPLOAD_FOLDER).mkdir(parents=True, exist_ok=True)
 Path(OUTPUT_FOLDER).mkdir(parents=True, exist_ok=True)
 
@@ -38,21 +38,12 @@ def sanitize_filename(filename):
 async def upload_folder(files: list[UploadFile]):
     """Uploads multiple files simulating folder upload."""
     folder_path = Path(UPLOAD_FOLDER)
-
-    # Ensure uploads directory exists
     folder_path.mkdir(parents=True, exist_ok=True)
 
     uploaded_files = []
     
     for file in files:
         sanitized_filename = sanitize_filename(file.filename)
-
-        # Extract subdirectory name if needed
-        subfolder = os.path.dirname(sanitized_filename)
-        if subfolder:
-            full_subfolder_path = folder_path / subfolder
-            full_subfolder_path.mkdir(parents=True, exist_ok=True)
-
         file_path = folder_path / sanitized_filename
 
         # Save file
@@ -64,7 +55,6 @@ async def upload_folder(files: list[UploadFile]):
     logging.info(f"Uploaded files: {[str(f) for f in uploaded_files]}")
 
     return {"message": "Folder uploaded successfully.", "files": [str(f) for f in uploaded_files]}
-
 
 @app.post("/process-folder/")
 def process_folder():
@@ -115,7 +105,7 @@ def process_folder():
 @app.get("/roi-overlay")
 def get_roi_overlay():
     """Returns the ROI overlay image if it exists."""
-    image_path = os.path.join(os.getcwd(), "outputs", "roi_overlay.png")  # Ensure absolute path
+    image_path = os.path.join(os.getcwd(), OUTPUT_FOLDER, "roi_overlay.png")  # Ensure absolute path
 
     if not os.path.exists(image_path):
         logging.error(f"ROI overlay image not found at: {image_path}")
