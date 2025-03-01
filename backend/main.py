@@ -6,45 +6,87 @@ import subprocess
 from pathlib import Path
 import pandas as pd
 import logging
+import re
 
+# Initialize FastAPI
 app = FastAPI()
+
+# Enable CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins (use ["http://localhost:3000"] for more security)
+    allow_origins=["*"],  # Allow all origins (use ["http://localhost:3000"] for security)
     allow_credentials=True,
     allow_methods=["*"],  # Allow all HTTP methods
     allow_headers=["*"],  # Allow all headers
 )
 
+# Define Upload Folder
 UPLOAD_FOLDER = "uploads"
-Path(UPLOAD_FOLDER).mkdir(exist_ok=True)  # Ensure the uploads directory exists
+Path(UPLOAD_FOLDER).mkdir(parents=True, exist_ok=True)  # Ensure the uploads directory exists
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 
+# Function to sanitize filenames (removes problematic characters)
+def sanitize_filename(filename):
+    return re.sub(r'[^\w\-.]', '_', filename)
 
 @app.post("/upload-folder/")
 async def upload_folder(files: list[UploadFile]):
     """Uploads multiple files simulating folder upload."""
     folder_path = Path(UPLOAD_FOLDER)
+
+    # Ensure uploads directory exists
+    folder_path.mkdir(parents=True, exist_ok=True)
+
+    uploaded_files = []
+    
     for file in files:
-        file_path = folder_path / file.filename
+        sanitized_filename = sanitize_filename(file.filename)
+
+        # Extract subdirectory name if needed
+        subfolder = os.path.dirname(sanitized_filename)
+        if subfolder:
+            full_subfolder_path = folder_path / subfolder
+            full_subfolder_path.mkdir(parents=True, exist_ok=True)
+
+        file_path = folder_path / sanitized_filename
+
+        # Save file
         with file_path.open("wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
-    return {"message": "Folder uploaded successfully."}
+        uploaded_files.append(file_path)
+
+    logging.info(f"Uploaded files: {[str(f) for f in uploaded_files]}")
+
+    return {"message": "Folder uploaded successfully.", "files": [str(f) for f in uploaded_files]}
 
 
 @app.post("/process-folder/")
 def process_folder():
     """Runs `script.py` on the uploaded folder and returns computed metrics."""
+    
+    # Check if the uploads folder exists
+    if not os.path.exists(UPLOAD_FOLDER) or not os.listdir(UPLOAD_FOLDER):
+        logging.error("Uploads directory is empty or missing.")
+        raise HTTPException(status_code=400, detail="No files found in uploads directory.")
+
+    logging.info(f"Processing files in {UPLOAD_FOLDER}")
+
     try:
-        # Run script.py with the uploads directory as input
         output_excel = "output_metrics.xlsx"
+
+        # Run script.py with the uploads directory as input
         command = ["python", "script.py", UPLOAD_FOLDER, "--output", output_excel]
         subprocess.run(command, check=True)
 
-        # Read the Excel file
+        # Ensure the output file was created
+        if not os.path.exists(output_excel):
+            logging.error("Processing script did not generate an output file.")
+            raise HTTPException(status_code=500, detail="Processing failed, no output file found.")
+
+        # Read the Excel file and return results
         df = pd.read_excel(output_excel)
         results = df.to_dict(orient="records")
 
