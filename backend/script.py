@@ -66,7 +66,7 @@ def detect_circular_object(image):
     
     return int(center_y), int(center_x), int(radius)
 
-def create_circular_roi(image, pixel_spacing, desired_area_mm2=338 *100):
+def create_circular_roi(image, pixel_spacing, desired_area_mm2=338 * 100):
     height, width = image.shape
     x_spacing, y_spacing = pixel_spacing
     radius_mm = np.sqrt(desired_area_mm2 / np.pi)
@@ -75,7 +75,7 @@ def create_circular_roi(image, pixel_spacing, desired_area_mm2=338 *100):
     # Detect the actual circular object
     center_y, center_x, object_radius = detect_circular_object(image)
 
-    center_y = min(center_y + 2.5 , height - radius_pixels - 1)
+    center_y = min(center_y + 2.5, height - radius_pixels - 1)
 
     # Adjust ROI size if it's exceeding detected object size
     radius_pixels = min(radius_pixels, object_radius - 2)  
@@ -118,22 +118,18 @@ def compute_metrics(image, ROI_mask):
     if signal_values.size == 0:
         logging.warning("ROI is empty or incorrectly applied.")
         return None
-    mean_ROI_signal = np.mean(signal_values)
-    min_ROI_signal = np.min(signal_values)
-    max_ROI_signal = np.max(signal_values)
-    sum_ROI_signal = np.sum(signal_values)
-    std_ROI_signal = np.std(signal_values)
-    SNR = round(mean_ROI_signal / std_ROI_signal, 1) if std_ROI_signal != 0 else 0
-    PIU = int(np.floor(100 * (1 - ((max_ROI_signal - min_ROI_signal) / (max_ROI_signal + min_ROI_signal))))) if (max_ROI_signal + min_ROI_signal) != 0 else 0
-    return {
-        "Mean": round(mean_ROI_signal, 1),
-        "Min": round(min_ROI_signal, 3),
-        "Max": round(max_ROI_signal, 3),
-        "Sum": int(sum_ROI_signal),
-        "StDev": round(std_ROI_signal, 3),
-        "SNR": SNR,  # Rounded to 1 decimal place
-        "PIU": PIU,  # Rounded to whole number
+
+    metrics = {
+        "Mean": round(np.mean(signal_values), 2),
+        "Min": round(np.min(signal_values), 2),
+        "Max": round(np.max(signal_values), 2),
+        "Sum": round(np.sum(signal_values), 2),
+        "StDev": round(np.std(signal_values), 2),
+        "SNR": round(np.mean(signal_values) / np.std(signal_values), 2) if np.std(signal_values) != 0 else 0,
+        "PIU": round(100 * (1 - ((np.max(signal_values) - np.min(signal_values)) / (np.max(signal_values) + np.min(signal_values)))), 2) if (np.max(signal_values) + np.min(signal_values)) != 0 else 0
     }
+    
+    return metrics
 
 def process_directory(directory_path, output_excel='output_metrics.xlsx'):
     results = []
@@ -152,11 +148,6 @@ def process_directory(directory_path, output_excel='output_metrics.xlsx'):
         if metrics:
             results.append({"Filename": os.path.basename(best_slice), **metrics})
             logging.info(f"Processed {best_slice} successfully.")
-            
-            print("\n*** Best Slice Metrics ***")
-            for key, value in metrics.items():
-                print(f"{key}: {value}")
-            print("****************************\n")
     except Exception as e:
         logging.error(f"Error processing {best_slice}: {e}", exc_info=True)
     
@@ -164,7 +155,8 @@ def process_directory(directory_path, output_excel='output_metrics.xlsx'):
         logging.warning("No metrics were extracted. Ensure that the DICOM files are valid.")
         return
     
-    df = pd.DataFrame(results)
+    # Convert to Pandas DataFrame and round all values to 2 decimal places
+    df = pd.DataFrame(results).round(2)
     df.to_excel(output_excel, index=False)
     print(f"Metrics saved to {output_excel}")
 
