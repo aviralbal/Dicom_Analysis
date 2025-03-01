@@ -115,9 +115,12 @@ def process_folder():
 @app.get("/roi-overlay")
 def get_roi_overlay():
     """Returns the ROI overlay image if it exists."""
-    image_path = os.path.join(OUTPUT_FOLDER, "roi_overlay.png")
+    image_path = os.path.join(os.getcwd(), "outputs", "roi_overlay.png")  # Ensure absolute path
+
     if not os.path.exists(image_path):
+        logging.error(f"ROI overlay image not found at: {image_path}")
         raise HTTPException(status_code=404, detail="ROI overlay image not found.")
+
     return FileResponse(image_path, media_type="image/png")
 
 @app.get("/download-metrics")
