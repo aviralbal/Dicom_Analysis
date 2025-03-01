@@ -107,7 +107,7 @@ def visualize_roi(image, center_x, center_y, radius_pixels):
     plt.axis('off')
     
     # Save visualization
-    save_path = "roi_overlay.png"
+    save_path = "outputs/roi_overlay.png"
     plt.savefig(save_path, bbox_inches='tight', dpi=300)
     print(f"ROI visualization saved as: {save_path}")
 
