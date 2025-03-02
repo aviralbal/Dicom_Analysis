@@ -8,6 +8,7 @@ from pathlib import Path
 import pandas as pd
 import logging
 import re
+import time  # Added to generate unique file names
 
 # Initialize FastAPI
 app = FastAPI()
@@ -94,6 +95,9 @@ def process_folder():
         output_excel = os.path.join(OUTPUT_FOLDER, "output_metrics.xlsx")
         output_image = os.path.join(OUTPUT_FOLDER, "roi_overlay.png")
 
+        # Ensure old outputs are cleared before new processing
+        clear_output_files()
+
         # Run script.py with the uploads directory as input
         command = ["python", "script.py", UPLOAD_FOLDER, "--output", output_excel]
         subprocess.run(command, check=True)
@@ -108,12 +112,19 @@ def process_folder():
         results = df.to_dict(orient="records")
 
         # Check if the output image exists
-        image_exists = os.path.exists(output_image)
+        if os.path.exists(output_image):
+            # Rename image to force a fresh load
+            new_image_name = f"roi_overlay_{int(time.time())}.png"
+            new_image_path = os.path.join(OUTPUT_FOLDER, new_image_name)
+            os.rename(output_image, new_image_path)
+            logging.info(f"Renamed ROI image to: {new_image_name}")
+        else:
+            new_image_name = None
 
         return {
             "message": "Processing completed.",
             "results": results,
-            "image_url": "/roi-overlay" if image_exists else None,
+            "image_url": f"/roi-overlay?timestamp={int(time.time())}" if new_image_name else None,
             "excel_url": "/download-metrics"
         }
 
@@ -126,9 +137,9 @@ def process_folder():
         raise HTTPException(status_code=500, detail="Unexpected server error.")
 
 @app.get("/roi-overlay")
-def get_roi_overlay():
-    """Returns the ROI overlay image if it exists."""
-    image_path = os.path.join(os.getcwd(), OUTPUT_FOLDER, "roi_overlay.png")  # Ensure absolute path
+def get_roi_overlay(timestamp: int = None):
+    """Returns the latest ROI overlay image if it exists."""
+    image_path = os.path.join(OUTPUT_FOLDER, "roi_overlay.png")  # Default expected file name
 
     if not os.path.exists(image_path):
         logging.error(f"ROI overlay image not found at: {image_path}")
