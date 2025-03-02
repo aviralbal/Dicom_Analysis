@@ -8,7 +8,6 @@ from pathlib import Path
 import pandas as pd
 import logging
 import re
-import time  # Added to generate unique file names
 
 # Initialize FastAPI
 app = FastAPI()
@@ -112,19 +111,12 @@ def process_folder():
         results = df.to_dict(orient="records")
 
         # Check if the output image exists
-        if os.path.exists(output_image):
-            # Rename image to force a fresh load
-            new_image_name = f"roi_overlay_{int(time.time())}.png"
-            new_image_path = os.path.join(OUTPUT_FOLDER, new_image_name)
-            os.rename(output_image, new_image_path)
-            logging.info(f"Renamed ROI image to: {new_image_name}")
-        else:
-            new_image_name = None
+        image_exists = os.path.exists(output_image)
 
         return {
             "message": "Processing completed.",
             "results": results,
-            "image_url": f"/roi-overlay?timestamp={int(time.time())}" if new_image_name else None,
+            "image_url": "/roi-overlay" if image_exists else None,
             "excel_url": "/download-metrics"
         }
 
@@ -137,7 +129,7 @@ def process_folder():
         raise HTTPException(status_code=500, detail="Unexpected server error.")
 
 @app.get("/roi-overlay")
-def get_roi_overlay(timestamp: int = None):
+def get_roi_overlay():
     """Returns the latest ROI overlay image if it exists."""
     image_path = os.path.join(OUTPUT_FOLDER, "roi_overlay.png")  # Default expected file name
 
