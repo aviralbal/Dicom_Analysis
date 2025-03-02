@@ -24,7 +24,6 @@ app.add_middleware(
 # Define Upload and Output Folders
 UPLOAD_FOLDER = "uploads"
 OUTPUT_FOLDER = "outputs"
-Path(UPLOAD_FOLDER).mkdir(parents=True, exist_ok=True)
 Path(OUTPUT_FOLDER).mkdir(parents=True, exist_ok=True)
 
 # Configure logging
@@ -34,14 +33,21 @@ logging.basicConfig(level=logging.INFO)
 def sanitize_filename(filename):
     return re.sub(r'[^\w\-.]', '_', filename)
 
+# Function to delete old files in a folder
+def clear_folder(folder):
+    if os.path.exists(folder):
+        shutil.rmtree(folder)  # Deletes the folder and its contents
+    os.makedirs(folder)  # Recreate the empty folder
+
 @app.post("/upload-folder/")
 async def upload_folder(files: list[UploadFile]):
-    """Uploads multiple files simulating folder upload."""
-    folder_path = Path(UPLOAD_FOLDER)
-    folder_path.mkdir(parents=True, exist_ok=True)
+    """Uploads multiple files, replacing any previous ones."""
+    # Clear the uploads folder before saving new files
+    clear_folder(UPLOAD_FOLDER)
 
+    folder_path = Path(UPLOAD_FOLDER)
     uploaded_files = []
-    
+
     for file in files:
         sanitized_filename = sanitize_filename(file.filename)
         file_path = folder_path / sanitized_filename
@@ -50,17 +56,18 @@ async def upload_folder(files: list[UploadFile]):
         with file_path.open("wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
-        uploaded_files.append(file_path)
+        uploaded_files.append(str(file_path))
 
-    logging.info(f"Uploaded files: {[str(f) for f in uploaded_files]}")
+    logging.info(f"Uploaded new files: {uploaded_files}")
 
-    return {"message": "Folder uploaded successfully.", "files": [str(f) for f in uploaded_files]}
+    # Automatically start processing after uploading
+    return process_folder()
 
 @app.post("/process-folder/")
 def process_folder():
     """Runs `script.py` on the uploaded folder and returns computed metrics."""
     
-    # Check if the uploads folder exists
+    # Check if the uploads folder exists and contains files
     if not os.path.exists(UPLOAD_FOLDER) or not os.listdir(UPLOAD_FOLDER):
         logging.error("Uploads directory is empty or missing.")
         raise HTTPException(status_code=400, detail="No files found in uploads directory.")
