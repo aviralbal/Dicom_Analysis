@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 import os
@@ -33,17 +33,33 @@ logging.basicConfig(level=logging.INFO)
 def sanitize_filename(filename):
     return re.sub(r'[^\w\-.]', '_', filename)
 
-# Function to delete old files in a folder
+# Function to clear a folder before processing
 def clear_folder(folder):
     if os.path.exists(folder):
         shutil.rmtree(folder)  # Deletes the folder and its contents
     os.makedirs(folder)  # Recreate the empty folder
 
+# Function to delete old output files (including roi_overlay.png)
+def clear_output_files():
+    roi_image = os.path.join(OUTPUT_FOLDER, "roi_overlay.png")
+    output_excel = os.path.join(OUTPUT_FOLDER, "output_metrics.xlsx")
+
+    # Remove ROI overlay image if exists
+    if os.path.exists(roi_image):
+        os.remove(roi_image)
+        logging.info("Deleted old roi_overlay.png")
+
+    # Remove output Excel file if exists
+    if os.path.exists(output_excel):
+        os.remove(output_excel)
+        logging.info("Deleted old output_metrics.xlsx")
+
 @app.post("/upload-folder/")
 async def upload_folder(files: list[UploadFile]):
     """Uploads multiple files, replacing any previous ones."""
-    # Clear the uploads folder before saving new files
+    # Clear previous uploads and outputs before new processing
     clear_folder(UPLOAD_FOLDER)
+    clear_output_files()
 
     folder_path = Path(UPLOAD_FOLDER)
     uploaded_files = []
