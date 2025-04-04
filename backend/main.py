@@ -66,7 +66,7 @@ def process_nema_body():
         clear_output_files()
 
         # Run the nema_body.py script. Adjust the command if necessary.
-        command = ["python", "nema_body.py", UPLOAD_FOLDER, "--output", output_excel]
+        command = ["python", "nema_body.py", UPLOAD_FOLDER]
         subprocess.run(command, check=True)
 
         if not os.path.exists(output_excel):
