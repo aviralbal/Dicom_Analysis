@@ -8,14 +8,15 @@ from pathlib import Path
 import pandas as pd
 import logging
 import re
+import uuid
 
 # Initialize FastAPI
 app = FastAPI()
 
-# Enable CORS (as before)
+# Enable CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins
+    allow_origins=["*"],  # Allow all origins (for production, restrict as needed)
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -28,6 +29,9 @@ Path(OUTPUT_FOLDER).mkdir(parents=True, exist_ok=True)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
+
+# Global variable to store the current upload folder
+current_upload_folder = None
 
 # Function to sanitize filenames (removes problematic characters)
 def sanitize_filename(filename):
@@ -55,11 +59,8 @@ def process_nema_body():
     Processes the uploaded folder using the nema_body.py script.
     Returns the metrics grouped by Orientation (Sagi, Coronal, Trans).
     """
-    if not os.path.exists(UPLOAD_FOLDER):
-        os.makedirs(UPLOAD_FOLDER)
-        logging.info("Uploads folder did not exist. Created a new one.")
-    
-    if not os.listdir(UPLOAD_FOLDER):
+    global current_upload_folder
+    if current_upload_folder is None or not os.path.exists(current_upload_folder) or not os.listdir(current_upload_folder):
         logging.error("Uploads folder is empty.")
         raise HTTPException(status_code=400, detail="No files found in uploads directory.")
     try:
@@ -67,7 +68,7 @@ def process_nema_body():
         clear_output_files()
 
         # Run the nema_body.py script. Adjust the command if necessary.
-        command = ["python", "nema_body.py", UPLOAD_FOLDER]
+        command = ["python", "nema_body.py", current_upload_folder]
         result = subprocess.run(command, capture_output=True, text=True)
         logging.info("nema_body.py stdout: " + result.stdout)
         logging.error("nema_body.py stderr: " + result.stderr)
@@ -108,32 +109,38 @@ def download_nema_body():
 
 @app.post("/upload-folder/")
 async def upload_folder(files: list[UploadFile]):
-    # NOTE: We no longer clear the UPLOAD_FOLDER so that the files remain available for later processing.
+    """
+    Creates a new subfolder in the uploads folder and saves the files there.
+    This subfolder name is stored in the global variable 'current_upload_folder'
+    so that subsequent processing endpoints use the newly created folder.
+    """
+    global current_upload_folder
     clear_output_files()
-    folder_path = Path(UPLOAD_FOLDER)
-    if not folder_path.exists():
-        folder_path.mkdir(parents=True, exist_ok=True)
+    # Create a new unique subfolder inside UPLOAD_FOLDER
+    current_upload_folder = os.path.join(UPLOAD_FOLDER, str(uuid.uuid4()))
+    Path(current_upload_folder).mkdir(parents=True, exist_ok=True)
     uploaded_files = []
     for file in files:
         sanitized_filename = sanitize_filename(file.filename)
-        file_path = folder_path / sanitized_filename
+        file_path = Path(current_upload_folder) / sanitized_filename
         with file_path.open("wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
         uploaded_files.append(str(file_path))
-    logging.info(f"Uploaded new files: {uploaded_files}")
-    return {"message": "Files uploaded successfully.", "uploaded_files": uploaded_files}
+    logging.info(f"Uploaded new files to {current_upload_folder}: {uploaded_files}")
+    return {"message": "Files uploaded successfully.", "uploaded_files": uploaded_files, "folder": current_upload_folder}
 
 @app.post("/process-folder/")
 def process_folder():
-    if not os.path.exists(UPLOAD_FOLDER) or not os.listdir(UPLOAD_FOLDER):
+    global current_upload_folder
+    if current_upload_folder is None or not os.path.exists(current_upload_folder) or not os.listdir(current_upload_folder):
         logging.error("Uploads directory is empty or missing.")
         raise HTTPException(status_code=400, detail="No files found in uploads directory.")
-    logging.info(f"Processing files in {UPLOAD_FOLDER}")
+    logging.info(f"Processing files in {current_upload_folder}")
     try:
         output_excel = os.path.join(OUTPUT_FOLDER, "output_metrics.xlsx")
         output_image = os.path.join(OUTPUT_FOLDER, "roi_overlay.png")
         clear_output_files()
-        command = ["python", "script.py", UPLOAD_FOLDER, "--output", output_excel]
+        command = ["python", "script.py", current_upload_folder, "--output", output_excel]
         subprocess.run(command, check=True)
         if not os.path.exists(output_excel):
             logging.error("Processing script did not generate an output file.")
