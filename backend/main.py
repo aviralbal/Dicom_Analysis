@@ -56,6 +56,13 @@ def process_nema_body():
     Processes the uploaded folder using the nema_body.py script.
     Returns the metrics grouped by Orientation (Sagi, Coronal, Trans).
     """
+    if not os.path.exists(UPLOAD_FOLDER):
+        os.makedirs(UPLOAD_FOLDER)
+        logging.info("Uploads folder did not exist. Created a new one.")
+    
+    if not os.listdir(UPLOAD_FOLDER):
+        logging.error("Uploads folder is empty.")
+        raise HTTPException(status_code=400, detail="No files found in uploads directory.")
     try:
         output_excel = os.path.join(OUTPUT_FOLDER, "nema_body_metrics.xlsx")
         clear_output_files()
