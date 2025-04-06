@@ -99,23 +99,33 @@ def process_folder():
 
 @app.post("/process-nema-body/")
 def process_nema_body():
-    if not os.path.exists(UPLOAD_FOLDER) or not os.listdir(UPLOAD_FOLDER):
+    if not os.path.exists(UPLOAD_FOLDER):
+        os.makedirs(UPLOAD_FOLDER)
+        logging.info("Uploads folder did not exist. Created a new one.")
+    
+    if not os.listdir(UPLOAD_FOLDER):
         logging.error("Uploads folder is empty.")
         raise HTTPException(status_code=400, detail="No files found in uploads directory.")
     try:
         output_excel = os.path.join(OUTPUT_FOLDER, "nema_body_metrics.xlsx")
         clear_output_files()
-        command = ["python", "nema_body.py", UPLOAD_FOLDER]
+
+        # Updated command: include the --output flag
+        command = ["python", "nema_body.py", UPLOAD_FOLDER, "--output", output_excel]
         result = subprocess.run(command, capture_output=True, text=True)
         logging.info("nema_body.py stdout: " + result.stdout)
         logging.error("nema_body.py stderr: " + result.stderr)
         if result.returncode != 0:
             raise HTTPException(status_code=500, detail="Error processing NEMA body folder.")
+
         if not os.path.exists(output_excel):
             logging.error("NEMA body processing did not generate an output file.")
             raise HTTPException(status_code=500, detail="Processing failed, no output file found.")
+
         df = pd.read_excel(output_excel)
+        # Group the metrics by Orientation
         grouped = df.groupby("Orientation").apply(lambda x: x.to_dict(orient="records")).to_dict()
+
         return {
             "message": "NEMA body processing completed.",
             "results": grouped,
@@ -127,6 +137,7 @@ def process_nema_body():
     except Exception as e:
         logging.error(f"Unexpected error: {e}")
         raise HTTPException(status_code=500, detail="Unexpected server error.")
+
 
 @app.get("/download-metrics")
 def download_metrics():
