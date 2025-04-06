@@ -29,16 +29,17 @@ Path(OUTPUT_FOLDER).mkdir(parents=True, exist_ok=True)
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 
-# (sanitize_filename, clear_folder, clear_output_files as before)
-
+# Function to sanitize filenames (removes problematic characters)
 def sanitize_filename(filename):
     return re.sub(r'[^\w\-.]', '_', filename)
 
+# Function to clear a folder (for outputs only, not for uploads now)
 def clear_folder(folder):
     if os.path.exists(folder):
         shutil.rmtree(folder)
     os.makedirs(folder)
 
+# Function to delete old output files (including roi_overlay.png)
 def clear_output_files():
     roi_image = os.path.join(OUTPUT_FOLDER, "roi_overlay.png")
     output_excel = os.path.join(OUTPUT_FOLDER, "output_metrics.xlsx")
@@ -47,8 +48,6 @@ def clear_output_files():
         if os.path.exists(f):
             os.remove(f)
             logging.info(f"Deleted old {os.path.basename(f)}")
-
-# Existing endpoints for /upload-folder/, /process-folder/, /roi-overlay, /download-metrics remain unchanged
 
 @app.post("/process-nema-body/")
 def process_nema_body():
@@ -69,7 +68,11 @@ def process_nema_body():
 
         # Run the nema_body.py script. Adjust the command if necessary.
         command = ["python", "nema_body.py", UPLOAD_FOLDER]
-        subprocess.run(command, check=True)
+        result = subprocess.run(command, capture_output=True, text=True)
+        logging.info("nema_body.py stdout: " + result.stdout)
+        logging.error("nema_body.py stderr: " + result.stderr)
+        if result.returncode != 0:
+            raise HTTPException(status_code=500, detail="Error processing NEMA body folder.")
 
         if not os.path.exists(output_excel):
             logging.error("NEMA body processing did not generate an output file.")
@@ -103,12 +106,13 @@ def download_nema_body():
         filename="nema_body_metrics.xlsx"
     )
 
-# (Keep the rest of your endpoints as before)
 @app.post("/upload-folder/")
 async def upload_folder(files: list[UploadFile]):
-    clear_folder(UPLOAD_FOLDER)
+    # NOTE: We no longer clear the UPLOAD_FOLDER so that the files remain available for later processing.
     clear_output_files()
     folder_path = Path(UPLOAD_FOLDER)
+    if not folder_path.exists():
+        folder_path.mkdir(parents=True, exist_ok=True)
     uploaded_files = []
     for file in files:
         sanitized_filename = sanitize_filename(file.filename)
