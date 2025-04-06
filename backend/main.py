@@ -8,6 +8,9 @@ from pathlib import Path
 import pandas as pd
 import logging
 import re
+import math
+import numpy as np
+import json
 
 # Initialize FastAPI
 app = FastAPI()
@@ -97,6 +100,23 @@ def process_folder():
         logging.error(f"Unexpected error: {e}")
         raise HTTPException(status_code=500, detail="Unexpected server error.")
 
+def fix_floats(obj):
+    """
+    Recursively convert any non-finite float (NaN, inf, -inf) in a data structure
+    (dict, list, float) to None.
+    """
+    if isinstance(obj, float):
+        # Check if the float is finite
+        if not math.isfinite(obj):
+            return None
+        return obj
+    elif isinstance(obj, dict):
+        return {k: fix_floats(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [fix_floats(item) for item in obj]
+    else:
+        return obj
+
 @app.post("/process-nema-body/")
 def process_nema_body():
     if not os.path.exists(UPLOAD_FOLDER):
@@ -110,7 +130,7 @@ def process_nema_body():
         output_excel = os.path.join(OUTPUT_FOLDER, "nema_body_metrics.xlsx")
         clear_output_files()
 
-        # Updated command: include the --output flag
+        # Include the --output parameter if your script expects it:
         command = ["python", "nema_body.py", UPLOAD_FOLDER, "--output", output_excel]
         result = subprocess.run(command, capture_output=True, text=True)
         logging.info("nema_body.py stdout: " + result.stdout)
@@ -125,10 +145,13 @@ def process_nema_body():
         df = pd.read_excel(output_excel)
         # Group the metrics by Orientation
         grouped = df.groupby("Orientation").apply(lambda x: x.to_dict(orient="records")).to_dict()
+        
+        # Fix any non-finite float values
+        grouped_fixed = fix_floats(grouped)
 
         return {
             "message": "NEMA body processing completed.",
-            "results": grouped,
+            "results": grouped_fixed,
             "excel_url": "/download-nema-body"
         }
     except subprocess.CalledProcessError as e:
