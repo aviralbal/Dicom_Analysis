@@ -121,7 +121,7 @@ async def upload_folder(files: list[UploadFile]):
             shutil.copyfileobj(file.file, buffer)
         uploaded_files.append(str(file_path))
     logging.info(f"Uploaded new files: {uploaded_files}")
-    return process_folder()
+    return {"message": "Files uploaded successfully.", "uploaded_files": uploaded_files}
 
 @app.post("/process-folder/")
 def process_folder():
