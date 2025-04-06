@@ -9,14 +9,15 @@ import pandas as pd
 import logging
 import re
 import uuid
+import glob
 
 # Initialize FastAPI
 app = FastAPI()
 
-# Enable CORS
+# Enable CORS (as before)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins (for production, restrict as needed)
+    allow_origins=["*"],  # Allow all origins (adjust in production)
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -30,7 +31,7 @@ Path(OUTPUT_FOLDER).mkdir(parents=True, exist_ok=True)
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 
-# Global variable to store the current upload folder
+# Global variable to store the current upload subfolder path
 current_upload_folder = None
 
 # Function to sanitize filenames (removes problematic characters)
@@ -53,6 +54,14 @@ def clear_output_files():
             os.remove(f)
             logging.info(f"Deleted old {os.path.basename(f)}")
 
+def get_latest_upload_folder():
+    """Returns the most recently modified subfolder inside UPLOAD_FOLDER, if any."""
+    subfolders = [f for f in glob.glob(os.path.join(UPLOAD_FOLDER, "*")) if os.path.isdir(f)]
+    if subfolders:
+        latest = max(subfolders, key=os.path.getmtime)
+        return latest
+    return None
+
 @app.post("/process-nema-body/")
 def process_nema_body():
     """
@@ -60,6 +69,10 @@ def process_nema_body():
     Returns the metrics grouped by Orientation (Sagi, Coronal, Trans).
     """
     global current_upload_folder
+    # If current_upload_folder is not set, try to get the latest one
+    if current_upload_folder is None:
+        current_upload_folder = get_latest_upload_folder()
+    
     if current_upload_folder is None or not os.path.exists(current_upload_folder) or not os.listdir(current_upload_folder):
         logging.error("Uploads folder is empty.")
         raise HTTPException(status_code=400, detail="No files found in uploads directory.")
