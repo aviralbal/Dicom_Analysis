@@ -79,45 +79,87 @@ def detect_circular_object(image):
     radius = np.sqrt(largest_region.area / np.pi)
     return int(center_y), int(center_x), int(radius)
 
-def create_circular_roi(image, pixel_spacing, desired_area_mm2=338 * 100):
+def create_circular_roi(image, pixel_spacing, desired_area_mm2=338*100, show_plot=False):
     """
-    Create a circular ROI based on a desired area (338 cm^2).
+    Create a circular ROI based on a desired area (default is 338 cm^2).
     The ROI is placed within the largest circular object detected.
+    If show_plot is True, the ROI overlay will be displayed.
     """
     height, width = image.shape
     x_spacing, y_spacing = pixel_spacing
+    # Compute the radius in mm for the given area and convert to pixels.
     radius_mm = np.sqrt(desired_area_mm2 / np.pi)
     radius_pixels = max(1, round(radius_mm / x_spacing))
     center_y, center_x, object_radius = detect_circular_object(image)
+    # Adjust the center as in the original code.
     center_y = min(center_y + 3, height - radius_pixels - 1)
     radius_pixels = min(radius_pixels, object_radius - 2)
     if radius_pixels < 1:
         logging.warning("Computed ROI radius is too small, defaulting to 1 pixel.")
         radius_pixels = 1
-    # Optional: visualize ROI overlay (can be commented out if not desired)
+    # Plot the ROI overlay.
     fig, ax = plt.subplots(figsize=(6, 6))
     ax.imshow(image, cmap='gray')
     circle = Circle((center_x, center_y), radius_pixels, color='red', fill=False, linewidth=2)
     ax.add_patch(circle)
-    ax.set_title(f'ROI Overlay (Center: {center_x}, {center_y}, Radius: {radius_pixels} px)')
+    ax.set_title(f'Circular ROI Overlay (Center: {center_x}, {center_y}, Radius: {radius_pixels} px)')
     plt.axis('off')
-    plt.close(fig)
+    if show_plot:
+        plt.show()
+    else:
+        plt.close(fig)
     Y, X = np.ogrid[:height, :width]
     mask = ((X - center_x) ** 2 + (Y - center_y) ** 2) <= radius_pixels ** 2
     return mask.astype(np.uint8)
 
-def compute_metrics(image, use_roi, pixel_spacing):
+def create_central_circle_roi(image, pixel_spacing, desired_area_mm2=340*100, show_plot=False):
     """
-    Compute metrics from the image.
-      - For 'image' files, apply a circular ROI.
-      - For 'noise' files, use the entire image.
+    Create a central circular ROI with a fixed area of 340 cm^2 (34000 mm^2).
+    The circle is centered in the image.
+    
+    The circle's radius in mm is computed as:
+        r = sqrt(desired_area_mm2 / π)
+    and then converted to pixels using the average of the pixel spacings.
+    
+    If show_plot is True, the ROI overlay will be displayed.
+    """
+    height, width = image.shape
+    center_y, center_x = height // 2, width // 2
+    # Calculate the radius in mm.
+    r_mm = (desired_area_mm2 / np.pi) ** 0.5
+    # Use average pixel spacing for conversion.
+    avg_spacing = (pixel_spacing[0] + pixel_spacing[1]) / 2
+    r_pixels = r_mm / avg_spacing
+    # Plot the ROI overlay.
+    fig, ax = plt.subplots(figsize=(6, 6))
+    ax.imshow(image, cmap='gray')
+    circle = Circle((center_x, center_y), r_pixels, color='red', fill=False, linewidth=2)
+    ax.add_patch(circle)
+    ax.set_title(f'Central Circle ROI (Center: {center_x}, {center_y}, Radius: {r_pixels:.1f} px)')
+    plt.axis('off')
+    if show_plot:
+        plt.show()
+    else:
+        plt.close(fig)
+    Y, X = np.ogrid[:height, :width]
+    mask = ((X - center_x)**2 + (Y - center_y)**2) <= r_pixels**2
+    return mask.astype(np.uint8)
+
+def compute_metrics(image, use_roi, pixel_spacing, visualize=False):
+    """
+    Compute metrics from the image using an ROI.
+      - For image files ('image'), the ROI is based on the detected circular object.
+      - For noise files ('noise'), the ROI is a central circle with a fixed area of 340 cm^2.
     Returns a dictionary with Mean, Min, Max, Sum, and StDev.
+    The ROI overlay is shown if visualize is True.
     """
     if use_roi:
-        roi_mask = create_circular_roi(image, pixel_spacing)
-        data = image[roi_mask == 1]
+        # For image scans, use the detected circular ROI.
+        roi_mask = create_circular_roi(image, pixel_spacing, show_plot=visualize)
     else:
-        data = image.ravel()
+        # For noise scans, use the central circular ROI.
+        roi_mask = create_central_circle_roi(image, pixel_spacing, desired_area_mm2=340*100, show_plot=visualize)
+    data = image[roi_mask == 1]
     mean_val = float(np.mean(data))
     min_val = float(np.min(data))
     max_val = float(np.max(data))
@@ -131,7 +173,7 @@ def compute_metrics(image, use_roi, pixel_spacing):
         "StDev": round(stdev_val, 4)
     }
 
-def process_directory(input_directory):
+def process_directory(input_directory, visualize=False):
     """
     Process the input directory.
     If it contains subdirectories, process each subdirectory as a separate scan.
@@ -142,7 +184,7 @@ def process_directory(input_directory):
     noise_data = {}
     found_subfolders = False
 
-    # Process subdirectories if they exist
+    # Process subdirectories if they exist.
     for item in os.listdir(input_directory):
         item_path = os.path.join(input_directory, item)
         if os.path.isdir(item_path):
@@ -162,12 +204,12 @@ def process_directory(input_directory):
             except Exception as e:
                 logging.error(f"Error loading file '{dicom_path}': {e}", exc_info=True)
                 continue
-            use_roi = (type_.lower() == 'image')
+            use_roi = (type_.lower() == 'image')   # For image scans, detected circular ROI; for noise, use central ROI.
             if hasattr(ds, 'PixelSpacing') and len(ds.PixelSpacing) >= 2:
                 pixel_spacing = [float(ds.PixelSpacing[0]), float(ds.PixelSpacing[1])]
             else:
                 pixel_spacing = [1.0, 1.0]
-            metrics = compute_metrics(image, use_roi, pixel_spacing)
+            metrics = compute_metrics(image, use_roi, pixel_spacing, visualize)
             slice_number = getattr(ds, 'InstanceNumber', 1)
             row = {
                 "ScanID": item,
@@ -187,7 +229,7 @@ def process_directory(input_directory):
                 noise_data[orientation] = row
             logging.info(f"Processed subfolder '{item}' successfully.")
 
-    # If no subdirectories were found, process files directly in the input directory
+    # Process files directly in the input directory if no subdirectories found.
     if not found_subfolders:
         for file in os.listdir(input_directory):
             file_path = os.path.join(input_directory, file)
@@ -209,7 +251,7 @@ def process_directory(input_directory):
                 pixel_spacing = [float(ds.PixelSpacing[0]), float(ds.PixelSpacing[1])]
             else:
                 pixel_spacing = [1.0, 1.0]
-            metrics = compute_metrics(image, use_roi, pixel_spacing)
+            metrics = compute_metrics(image, use_roi, pixel_spacing, visualize)
             slice_number = getattr(ds, 'InstanceNumber', 1)
             row = {
                 "ScanID": file,
@@ -248,7 +290,7 @@ def process_directory(input_directory):
             paired_results.extend(rows)
         return paired_results
 
-    # For subfolder case, pair image and noise by orientation as before.
+    # For subdirectory case, pair image and noise by orientation.
     paired_results = []
     for orientation, image_row in image_data.items():
         if orientation in noise_data:
@@ -270,8 +312,9 @@ def main():
     parser = argparse.ArgumentParser(description="Process NEMA Body DICOM Metrics")
     parser.add_argument("input_directory", type=str, help="Folder containing subfolders or files with DICOM files")
     parser.add_argument("--output", type=str, default="nema_body_metrics.xlsx", help="Output Excel file name")
+    parser.add_argument("--visualize", action='store_true', help="Show ROI overlay plot for each image processed")
     args = parser.parse_args()
-    results = process_directory(args.input_directory)
+    results = process_directory(args.input_directory, visualize=args.visualize)
     if results:
         df = pd.DataFrame(results)
         df.to_excel(args.output, index=False)
