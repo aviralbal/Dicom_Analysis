@@ -122,7 +122,7 @@ function App() {
             boxShadow: "0px 4px 8px rgba(0, 123, 255, 0.3)"
           }}
         >
-          {loading ? "Processing..." : "Upload & Process"}
+          {loading ? "Processing..." : "Process Weekly"}
         </button>
         <button 
           onClick={handleProcessNemaBody} 
