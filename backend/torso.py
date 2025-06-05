@@ -9,7 +9,8 @@ import pandas as pd
 import scipy.io as sio
 import pydicom
 from matplotlib import pyplot as plt
-from skimage import morphology
+from matplotlib.patches import Circle
+from skimage import measure, filters, morphology
 
 # Configure logging
 today_str = datetime.datetime.now().strftime("%Y_%m_%d")
@@ -61,7 +62,7 @@ def compute_metrics(image: np.ndarray, mask: np.ndarray):
 
 
 def compute_snr(signal_mean: float, noise_std: float, is_individual: bool = False) -> float:
-    multiplier = 0.66 if is_individual else 0.7
+    multiplier = 0.66 if is_individual else 0.66  # Use 0.66 for both like nema_body
     return round(multiplier * signal_mean / noise_std, 1)
 
 
@@ -70,6 +71,85 @@ def compute_uniformity(signal_max: float, signal_min: float) -> float:
     if denom == 0:
         return 0.0
     return round(100.0 * (1 - ((signal_max - signal_min) / denom)), 1)
+
+
+def detect_circular_object(image):
+    """
+    Detect the largest circular object in the image using Otsu thresholding.
+    Returns the centroid (y,x) and computed radius.
+    Based on nema_body.py approach.
+    """
+    threshold = filters.threshold_otsu(image)
+    binary_mask = image > threshold
+    binary_mask = morphology.remove_small_objects(binary_mask, min_size=500)
+    labeled_mask = measure.label(binary_mask)
+    regions = measure.regionprops(labeled_mask, intensity_image=image)
+    if not regions:
+        logging.warning("No circular object detected. Using image center as fallback.")
+        return image.shape[0] // 2, image.shape[1] // 2, min(image.shape) // 4
+    largest_region = max(regions, key=lambda r: r.area)
+    center_y, center_x = largest_region.centroid
+    radius = np.sqrt(largest_region.area / np.pi)
+    return int(center_y), int(center_x), int(radius)
+
+
+def create_circular_roi_nema_style(image, pixel_spacing, desired_area_mm2=338*100, show_plot=False):
+    """
+    Create a circular ROI based on detected circular object (for image scans).
+    Based on nema_body.py approach.
+    """
+    height, width = image.shape
+    x_spacing, y_spacing = pixel_spacing
+    # Compute the radius in mm for the given area and convert to pixels.
+    radius_mm = np.sqrt(desired_area_mm2 / np.pi)
+    radius_pixels = max(1, round(radius_mm / x_spacing))
+    center_y, center_x, object_radius = detect_circular_object(image)
+    # Adjust the center as in the original code.
+    center_y = min(center_y + 3, height - radius_pixels - 1)
+    radius_pixels = min(radius_pixels, object_radius - 2)
+    if radius_pixels < 1:
+        logging.warning("Computed ROI radius is too small, defaulting to 1 pixel.")
+        radius_pixels = 1
+    # Plot the ROI overlay.
+    if show_plot:
+        fig, ax = plt.subplots(figsize=(6, 6))
+        ax.imshow(image, cmap='gray')
+        circle = Circle((center_x, center_y), radius_pixels, color='red', fill=False, linewidth=2)
+        ax.add_patch(circle)
+        ax.set_title(f'Circular ROI Overlay (Center: {center_x}, {center_y}, Radius: {radius_pixels} px)')
+        plt.axis('off')
+        plt.show()
+        plt.close(fig)
+    Y, X = np.ogrid[:height, :width]
+    mask = ((X - center_x) ** 2 + (Y - center_y) ** 2) <= radius_pixels ** 2
+    return mask.astype(np.uint8)
+
+
+def create_central_circle_roi(image, pixel_spacing, desired_area_mm2=340*100, show_plot=False):
+    """
+    Create a central circular ROI with a fixed area (for noise scans).
+    Based on nema_body.py approach.
+    """
+    height, width = image.shape
+    center_y, center_x = height // 2, width // 2
+    # Calculate the radius in mm.
+    r_mm = (desired_area_mm2 / np.pi) ** 0.5
+    # Use average pixel spacing for conversion.
+    avg_spacing = (pixel_spacing[0] + pixel_spacing[1]) / 2
+    r_pixels = r_mm / avg_spacing
+    # Plot the ROI overlay.
+    if show_plot:
+        fig, ax = plt.subplots(figsize=(6, 6))
+        ax.imshow(image, cmap='gray')
+        circle = Circle((center_x, center_y), r_pixels, color='red', fill=False, linewidth=2)
+        ax.add_patch(circle)
+        ax.set_title(f'Central Circle ROI (Center: {center_x}, {center_y}, Radius: {r_pixels:.1f} px)')
+        plt.axis('off')
+        plt.show()
+        plt.close(fig)
+    Y, X = np.ogrid[:height, :width]
+    mask = ((X - center_x)**2 + (Y - center_y)**2) <= r_pixels**2
+    return mask.astype(np.uint8)
 
 
 def create_roi_mask(
@@ -191,6 +271,7 @@ def process_torso_folder(folder: str) -> tuple:
     combined_results = []
     element_results = []
 
+    # Process combined views using nema_body approach
     for (orientation, ftype), filepath in combined_files.items():
         if ftype != 'image':
             continue
@@ -202,33 +283,9 @@ def process_torso_folder(folder: str) -> tuple:
             continue
         noise_image, noise_spacing = load_dicom_image(combined_files[noise_key])
 
-        # For combined (SAG, COR, TRA), use 340 cm² circle centered in the image for both signal and noise
-        sig_mask, sig_cx, sig_cy, sig_r = create_roi_mask(signal_image, signal_spacing, mode='noise')
-        noise_mask, noise_cx, noise_cy, noise_r = create_roi_mask(noise_image, noise_spacing, mode='noise')
-
-        # Display and save signal ROI
-        plt.figure()
-        plt.imshow(signal_image, cmap='gray')
-        circle = plt.Circle((sig_cx, sig_cy), sig_r, color='r', fill=False, linewidth=2)
-        plt.gca().add_patch(circle)
-        plt.title(f"Signal ROI {orientation.upper()}")
-        plt.axis('off')
-        plt.show()
-        vis_path_sig = os.path.join(vis_dir, f"{orientation}_signal_roi.png")
-        plt.savefig(vis_path_sig, bbox_inches='tight')
-        plt.close()
-
-        # Display and save noise ROI
-        plt.figure()
-        plt.imshow(noise_image, cmap='gray')
-        circle_n = plt.Circle((noise_cx, noise_cy), noise_r, color='b', fill=False, linewidth=2)
-        plt.gca().add_patch(circle_n)
-        plt.title(f"Noise ROI {orientation.upper()}")
-        plt.axis('off')
-        plt.show()
-        vis_path_noise = os.path.join(vis_dir, f"{orientation}_noise_roi.png")
-        plt.savefig(vis_path_noise, bbox_inches='tight')
-        plt.close()
+        # Use nema_body approach: detected circular ROI for image, central circle for noise
+        sig_mask = create_circular_roi_nema_style(signal_image, signal_spacing, show_plot=True)
+        noise_mask = create_central_circle_roi(noise_image, noise_spacing, show_plot=True)
 
         sig_max, sig_min, sig_mean = compute_metrics(signal_image, sig_mask)
         _, _, noise_mean = compute_metrics(noise_image, noise_mask)
@@ -246,6 +303,7 @@ def process_torso_folder(folder: str) -> tuple:
         })
         logging.info(f"{orientation.upper()} - SNR: {snr}, Uniformity: {uniformity}")
 
+    # Process individual elements (unchanged from original)
     for (elem, ftype), filepath in individual_files.items():
         if ftype != 'image':
             continue
@@ -318,7 +376,7 @@ def main():
 
     logging.info(f"Writing {len(df_combined)} combined rows and {len(df_elements)} element rows to Excel.")
 
-    with pd.ExcelWriter(args.output, engine="xlsxwriter") as writer:
+    with pd.ExcelWriter(args.output, engine="openpyxl") as writer:
         df_combined.to_excel(writer, index=False, sheet_name="Combined Views")
         df_elements.to_excel(writer, index=False, sheet_name="Individual Elements")
 
