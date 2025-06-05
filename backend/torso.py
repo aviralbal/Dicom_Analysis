@@ -312,6 +312,9 @@ def main():
     combined, elements = process_torso_folder(args.input_directory)
     df_combined = pd.DataFrame(combined)
     df_elements = pd.DataFrame(elements)
+    # Reorder individual elements according to ELEMENT_LABELS
+    desired_order = [e for e in ELEMENT_LABELS if e in df_elements['Element'].values]
+    df_elements = df_elements.set_index('Element').loc[desired_order].reset_index()
 
     logging.info(f"Writing {len(df_combined)} combined rows and {len(df_elements)} element rows to Excel.")
 
