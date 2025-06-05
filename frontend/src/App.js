@@ -6,6 +6,7 @@ function App() {
   const [selectedFiles, setSelectedFiles] = useState([]);
   const [processingResult, setProcessingResult] = useState([]);
   const [nemaResult, setNemaResult] = useState(null);
+  const [torsoResult, setTorsoResult] = useState(null);
   const [loading, setLoading] = useState(false);
   const [imagePath, setImagePath] = useState(""); 
   const [excelPath, setExcelPath] = useState(""); 
@@ -22,6 +23,7 @@ function App() {
     setLoading(true);
     setProcessingResult([]);
     setNemaResult(null);
+    setTorsoResult(null);
     setImagePath("");
     setExcelPath("");
     const formData = new FormData();
@@ -52,6 +54,7 @@ function App() {
     }
     setLoading(true);
     setNemaResult(null);
+    setTorsoResult(null);
     setImagePath("");
     setExcelPath("");
     const formData = new FormData();
@@ -70,6 +73,37 @@ function App() {
     } catch (error) {
       console.error("Error:", error);
       alert("An error occurred during NEMA Body processing. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleProcessTorso = async () => {
+    if (selectedFiles.length === 0) {
+      alert("Please select a folder to upload.");
+      return;
+    }
+    setLoading(true);
+    setNemaResult(null);
+    setTorsoResult(null);
+    setImagePath("");
+    setExcelPath("");
+    const formData = new FormData();
+    for (let i = 0; i < selectedFiles.length; i++) {
+      formData.append("files", selectedFiles[i]);
+    }
+    try {
+      // First, upload the folder
+      await fetch(`${BACKEND_URL}/upload-folder/`, { method: "POST", body: formData });
+      // Then, process it with the Torso script
+      const response = await fetch(`${BACKEND_URL}/process-torso/`, { method: "POST" });
+      if (!response.ok) throw new Error("Torso Processing failed.");
+      const data = await response.json();
+      setTorsoResult(data);
+      alert("Torso processing completed successfully!");
+    } catch (error) {
+      console.error("Error:", error);
+      alert("An error occurred during Torso processing. Please try again.");
     } finally {
       setLoading(false);
     }
@@ -140,6 +174,23 @@ function App() {
           }}
         >
           {loading ? "Processing..." : "Process Nema Body"}
+        </button>
+        <button 
+          onClick={handleProcessTorso} 
+          disabled={loading}
+          style={{
+            padding: "12px 24px",
+            fontSize: "16px",
+            color: "white",
+            backgroundColor: loading ? "#999" : "#28a745",
+            border: "none",
+            borderRadius: "8px",
+            cursor: loading ? "not-allowed" : "pointer",
+            transition: "background 0.3s ease",
+            boxShadow: "0px 4px 8px rgba(40, 167, 69, 0.3)"
+          }}
+        >
+          {loading ? "Processing..." : "Process Torso"}
         </button>
       </div>
 
@@ -232,6 +283,95 @@ function App() {
               </table>
             </div>
           ))}
+        </div>
+      )}
+
+      {torsoResult && (
+        <div style={{
+          width: "90%",
+          backgroundColor: "white",
+          padding: "20px",
+          borderRadius: "8px",
+          boxShadow: "0px 4px 8px rgba(0, 0, 0, 0.1)",
+          marginBottom: "15px",
+          textAlign: "center",
+        }}>
+          <h2 style={{ textAlign: "center", color: "#333", fontSize: "22px", marginBottom: "10px" }}>Torso Results</h2>
+          
+          {/* Combined Views Section */}
+          {torsoResult.combined_results && torsoResult.combined_results.length > 0 && (
+            <div style={{ marginBottom: "20px" }}>
+              <h3 style={{ textAlign: "center", color: "#555", marginBottom: "10px" }}>Combined Views</h3>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "14px", marginBottom: "15px" }}>
+                <thead>
+                  <tr style={{ backgroundColor: "#28a745", color: "white", textAlign: "center" }}>
+                    <th style={{ padding: "10px", border: "1px solid #ddd" }}>Region</th>
+                    <th style={{ padding: "10px", border: "1px solid #ddd" }}>Signal Max</th>
+                    <th style={{ padding: "10px", border: "1px solid #ddd" }}>Signal Min</th>
+                    <th style={{ padding: "10px", border: "1px solid #ddd" }}>SNR</th>
+                    <th style={{ padding: "10px", border: "1px solid #ddd" }}>Uniformity</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {torsoResult.combined_results.map((row, index) => (
+                    <tr key={index} style={{ textAlign: "center", borderBottom: "1px solid #ddd" }}>
+                      <td style={{ padding: "10px" }}>{row.Region}</td>
+                      <td style={{ padding: "10px" }}>{parseFloat(row["Signal Max"]).toFixed(2)}</td>
+                      <td style={{ padding: "10px" }}>{parseFloat(row["Signal Min"]).toFixed(2)}</td>
+                      <td style={{ padding: "10px" }}>{parseFloat(row.SNR).toFixed(2)}</td>
+                      <td style={{ padding: "10px" }}>{parseFloat(row.Uniformity).toFixed(2)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* Individual Elements Section */}
+          {torsoResult.element_results && torsoResult.element_results.length > 0 && (
+            <div>
+              <h3 style={{ textAlign: "center", color: "#555", marginBottom: "10px" }}>Individual Elements</h3>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "14px", marginBottom: "15px" }}>
+                <thead>
+                  <tr style={{ backgroundColor: "#28a745", color: "white", textAlign: "center" }}>
+                    <th style={{ padding: "10px", border: "1px solid #ddd" }}>Element</th>
+                    <th style={{ padding: "10px", border: "1px solid #ddd" }}>Signal Mean</th>
+                    <th style={{ padding: "10px", border: "1px solid #ddd" }}>Noise SD</th>
+                    <th style={{ padding: "10px", border: "1px solid #ddd" }}>SNR</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {torsoResult.element_results.map((row, index) => (
+                    <tr key={index} style={{ textAlign: "center", borderBottom: "1px solid #ddd" }}>
+                      <td style={{ padding: "10px" }}>{row.Element}</td>
+                      <td style={{ padding: "10px" }}>{parseFloat(row["Signal Mean"]).toFixed(2)}</td>
+                      <td style={{ padding: "10px" }}>{parseFloat(row["Noise SD"]).toFixed(2)}</td>
+                      <td style={{ padding: "10px" }}>{parseFloat(row.SNR).toFixed(2)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* Download Button */}
+          {torsoResult.excel_url && (
+            <div style={{ marginTop: "15px" }}>
+              <a href={`${BACKEND_URL}${torsoResult.excel_url}`} download>
+                <button style={{ 
+                  padding: "10px 16px", 
+                  fontSize: "14px", 
+                  backgroundColor: "#28a745", 
+                  color: "white", 
+                  border: "none", 
+                  borderRadius: "6px", 
+                  cursor: "pointer" 
+                }}>
+                  📊 Download Torso Results
+                </button>
+              </a>
+            </div>
+          )}
         </div>
       )}
 

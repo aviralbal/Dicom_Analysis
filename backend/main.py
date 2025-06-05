@@ -45,7 +45,7 @@ def clear_folder(folder):
 
 # Function to delete old output files (including roi_overlay.png)
 def clear_output_files():
-    for fname in ["roi_overlay.png", "output_metrics.xlsx", "nema_body_metrics.xlsx"]:
+    for fname in ["roi_overlay.png", "output_metrics.xlsx", "nema_body_metrics.xlsx", "torso_coil_analysis.xlsx"]:
         fpath = os.path.join(OUTPUT_FOLDER, fname)
         if os.path.exists(fpath):
             os.remove(fpath)
@@ -161,6 +161,55 @@ def process_nema_body():
         logging.error(f"Unexpected error: {e}")
         raise HTTPException(status_code=500, detail="Unexpected server error.")
 
+@app.post("/process-torso/")
+def process_torso():
+    if not os.path.exists(UPLOAD_FOLDER):
+        os.makedirs(UPLOAD_FOLDER)
+        logging.info("Uploads folder did not exist. Created a new one.")
+    
+    if not os.listdir(UPLOAD_FOLDER):
+        logging.error("Uploads folder is empty.")
+        raise HTTPException(status_code=400, detail="No files found in uploads directory.")
+    try:
+        output_excel = os.path.join(OUTPUT_FOLDER, "torso_coil_analysis.xlsx")
+        clear_output_files()
+
+        # Include the --output parameter as expected by torso.py
+        command = ["python", "torso.py", UPLOAD_FOLDER, "--output", output_excel]
+        result = subprocess.run(command, capture_output=True, text=True)
+        logging.info("torso.py stdout: " + result.stdout)
+        logging.error("torso.py stderr: " + result.stderr)
+        if result.returncode != 0:
+            raise HTTPException(status_code=500, detail="Error processing Torso folder.")
+
+        if not os.path.exists(output_excel):
+            logging.error("Torso processing did not generate an output file.")
+            raise HTTPException(status_code=500, detail="Processing failed, no output file found.")
+
+        # Read both sheets from the Excel file
+        combined_df = pd.read_excel(output_excel, sheet_name="Combined Views")
+        elements_df = pd.read_excel(output_excel, sheet_name="Individual Elements")
+        
+        # Convert to dictionaries
+        combined_results = combined_df.to_dict(orient="records")
+        element_results = elements_df.to_dict(orient="records")
+        
+        # Fix any non-finite float values
+        combined_fixed = fix_floats(combined_results)
+        elements_fixed = fix_floats(element_results)
+
+        return {
+            "message": "Torso processing completed.",
+            "combined_results": combined_fixed,
+            "element_results": elements_fixed,
+            "excel_url": "/download-torso"
+        }
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Error running torso.py: {e}")
+        raise HTTPException(status_code=500, detail="Error processing Torso folder.")
+    except Exception as e:
+        logging.error(f"Unexpected error: {e}")
+        raise HTTPException(status_code=500, detail="Unexpected server error.")
 
 @app.get("/download-metrics")
 def download_metrics():
@@ -182,6 +231,17 @@ def download_nema_body():
         excel_path,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         filename="nema_body_metrics.xlsx"
+    )
+
+@app.get("/download-torso")
+def download_torso():
+    excel_path = os.path.join(OUTPUT_FOLDER, "torso_coil_analysis.xlsx")
+    if not os.path.exists(excel_path):
+        raise HTTPException(status_code=404, detail="Torso analysis file not found.")
+    return FileResponse(
+        excel_path,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        filename="torso_coil_analysis.xlsx"
     )
 
 @app.get("/roi-overlay")
