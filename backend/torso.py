@@ -22,7 +22,12 @@ logging.basicConfig(
 )
 
 # Constants
-ELEMENT_LABELS = ["VAS1", "VAS2", "VAS3", "VPS1", "VPS2", "VPS3", "VAP1", "VAP2", "VAP3", "VPP1", "VPP2", "VPP3"]
+ELEMENT_LABELS = [
+    "VAS1", "VAS2", "VAS3",
+    "VPS1", "VPS2", "VPS3",
+    "VAP1", "VAP2", "VAP3",
+    "VPP1", "VPP2", "VPP3"
+]
 NOISE_AREA_MM2 = 340 * 100  # 340 cm^2 = 34000 mm^2
 SIGNAL_RADIUS_MM = 3
 
@@ -38,33 +43,27 @@ def is_dicom_file(file_path: str) -> bool:
     except Exception:
         return False
 
-
 def load_dicom_image(file_path: str):
     ds = pydicom.dcmread(file_path)
     image = ds.pixel_array.astype(np.float64)
     pixel_spacing = get_pixel_spacing(ds)
     return image, pixel_spacing
 
-
 def get_pixel_spacing(ds) -> list:
     if hasattr(ds, 'PixelSpacing') and len(ds.PixelSpacing) >= 2:
         return [float(ds.PixelSpacing[0]), float(ds.PixelSpacing[1])]
     return [1.0, 1.0]
 
-
 def normalize_label(label: str) -> str:
     return re.sub(r'[^a-z]', '', label.lower())
-
 
 def compute_metrics(image: np.ndarray, mask: np.ndarray):
     data = image[mask == 1]
     return float(np.max(data)), float(np.min(data)), float(np.mean(data))
 
-
 def compute_snr(signal_mean: float, noise_std: float, is_individual: bool = False) -> float:
-    multiplier = 0.66 if is_individual else 0.66  # Use 0.66 for both like nema_body
+    multiplier = 0.66 if is_individual else 0.66
     return round(multiplier * signal_mean / noise_std, 1)
-
 
 def compute_uniformity(signal_max: float, signal_min: float) -> float:
     denom = signal_max + signal_min
@@ -72,13 +71,7 @@ def compute_uniformity(signal_max: float, signal_min: float) -> float:
         return 0.0
     return round(100.0 * (1 - ((signal_max - signal_min) / denom)), 1)
 
-
 def detect_circular_object(image):
-    """
-    Detect the largest circular object in the image using Otsu thresholding.
-    Returns the centroid (y,x) and computed radius.
-    Based on nema_body.py approach.
-    """
     threshold = filters.threshold_otsu(image)
     binary_mask = image > threshold
     binary_mask = morphology.remove_small_objects(binary_mask, min_size=500)
@@ -92,25 +85,17 @@ def detect_circular_object(image):
     radius = np.sqrt(largest_region.area / np.pi)
     return int(center_y), int(center_x), int(radius)
 
-
 def create_circular_roi_nema_style(image, pixel_spacing, desired_area_mm2=338*100, show_plot=False):
-    """
-    Create a circular ROI based on detected circular object (for image scans).
-    Based on nema_body.py approach.
-    """
     height, width = image.shape
     x_spacing, y_spacing = pixel_spacing
-    # Compute the radius in mm for the given area and convert to pixels.
     radius_mm = np.sqrt(desired_area_mm2 / np.pi)
     radius_pixels = max(1, round(radius_mm / x_spacing))
     center_y, center_x, object_radius = detect_circular_object(image)
-    # Adjust the center as in the original code.
     center_y = min(center_y + 3, height - radius_pixels - 1)
     radius_pixels = min(radius_pixels, object_radius - 2)
     if radius_pixels < 1:
         logging.warning("Computed ROI radius is too small, defaulting to 1 pixel.")
         radius_pixels = 1
-    # Plot the ROI overlay.
     if show_plot:
         fig, ax = plt.subplots(figsize=(6, 6))
         ax.imshow(image, cmap='gray')
@@ -124,20 +109,12 @@ def create_circular_roi_nema_style(image, pixel_spacing, desired_area_mm2=338*10
     mask = ((X - center_x) ** 2 + (Y - center_y) ** 2) <= radius_pixels ** 2
     return mask.astype(np.uint8)
 
-
-def create_central_circle_roi(image, pixel_spacing, desired_area_mm2=340*100, show_plot=False):
-    """
-    Create a central circular ROI with a fixed area (for noise scans).
-    Based on nema_body.py approach.
-    """
+def create_central_circle_roi(image, pixel_spacing, desired_area_mm2=NOISE_AREA_MM2, show_plot=False):
     height, width = image.shape
     center_y, center_x = height // 2, width // 2
-    # Calculate the radius in mm.
-    r_mm = (desired_area_mm2 / np.pi) ** 0.5
-    # Use average pixel spacing for conversion.
+    r_mm = np.sqrt(desired_area_mm2 / np.pi)
     avg_spacing = (pixel_spacing[0] + pixel_spacing[1]) / 2
     r_pixels = r_mm / avg_spacing
-    # Plot the ROI overlay.
     if show_plot:
         fig, ax = plt.subplots(figsize=(6, 6))
         ax.imshow(image, cmap='gray')
@@ -148,9 +125,8 @@ def create_central_circle_roi(image, pixel_spacing, desired_area_mm2=340*100, sh
         plt.show()
         plt.close(fig)
     Y, X = np.ogrid[:height, :width]
-    mask = ((X - center_x)**2 + (Y - center_y)**2) <= r_pixels**2
+    mask = ((X - center_x) ** 2 + (Y - center_y) ** 2) <= r_pixels ** 2
     return mask.astype(np.uint8)
-
 
 def create_roi_mask(
     image: np.ndarray,
@@ -168,14 +144,12 @@ def create_roi_mask(
     if mode == 'signal':
         r_pixels = radius_mm / avg_spacing
     else:
-        r_mm = (area_mm2 / np.pi) ** 0.5
+        r_mm = np.sqrt(area_mm2 / np.pi)
         r_pixels = r_mm / avg_spacing
 
-    # Default center
     center_y, center_x = height // 2, width // 2
 
     if mode == 'signal' and find_max_intensity:
-        # For individual elements: find the absolute maximum within phantom (non-zero)
         phantom_mask = image > 0
         if np.any(phantom_mask):
             masked_image = np.where(phantom_mask, image, 0)
@@ -204,7 +178,6 @@ def create_roi_mask(
 
     return mask.astype(np.uint8), center_x, center_y, r_pixels
 
-
 def classify_files(files: list) -> tuple:
     combined = {}
     individual = {}
@@ -219,6 +192,13 @@ def classify_files(files: list) -> tuple:
             orientation = next((ori for ori in ['tra', 'sag', 'cor'] if ori in series_desc), None)
             coil_labels = [c.strip() for c in coil_string.split(';') if c.strip()]
 
+            # detect Norm filter from ImageType tag
+            is_norm = False
+            if hasattr(ds, 'ImageType'):
+                types = [t.upper() for t in ds.ImageType]
+                if 'NORM' in types:
+                    is_norm = True
+
             if len(coil_labels) == 1 and coil_labels[0] in ELEMENT_LABELS:
                 elem = coil_labels[0]
                 ftype = 'noise' if 'noise' in series_desc or 'noise' in f.lower() else 'image'
@@ -226,14 +206,13 @@ def classify_files(files: list) -> tuple:
                 logging.debug(f"[Individual] {f} -> ({elem}, {ftype})")
             elif orientation:
                 ftype = 'noise' if 'noise' in series_desc or 'noise' in f.lower() else 'image'
-                combined[(orientation, ftype)] = f
-                logging.debug(f"[Combined] {f} -> ({orientation}, {ftype})")
+                combined[(orientation, ftype, is_norm)] = f
+                logging.debug(f"[Combined] {f} -> ({orientation}, {ftype}, norm={is_norm})")
             else:
                 logging.warning(f"Unclassified file: {f}")
         except Exception as e:
             logging.error(f"Error reading {f}: {e}")
     return combined, individual
-
 
 def save_mat_output(results_dir: str, coil_type: str, snr_list: list, piu_list: list):
     mat_data = {
@@ -247,7 +226,6 @@ def save_mat_output(results_dir: str, coil_type: str, snr_list: list, piu_list: 
     mat_path = os.path.join(results_dir, f"SNR_PIU_{today_str}_{coil_type}_no_prescan.mat")
     sio.savemat(mat_path, mat_data)
     logging.info(f"Saved .mat to {mat_path}")
-
 
 def process_torso_folder(folder: str) -> tuple:
     vis_dir = os.path.join(folder, 'visualizations')
@@ -265,34 +243,50 @@ def process_torso_folder(folder: str) -> tuple:
         return [], []
 
     combined_files, individual_files = classify_files(dicom_files)
-    logging.info(f"Classified Combined: {list(combined_files.keys())}")
-    logging.info(f"Classified Individual: {list(individual_files.keys())}")
+    logging.info(f"Classified Combined keys: {list(combined_files.keys())}")
+    logging.info(f"Classified Individual keys: {list(individual_files.keys())}")
 
     combined_results = []
     element_results = []
 
-    # Process combined views using nema_body approach
-    for (orientation, ftype), filepath in combined_files.items():
-        if ftype != 'image':
-            continue
-        logging.info(f"Processing {orientation.upper()} combined image: {filepath}")
-        signal_image, signal_spacing = load_dicom_image(filepath)
-        noise_key = (orientation, 'noise')
-        if noise_key not in combined_files:
-            logging.warning(f"No noise for {orientation}, skipping.")
-            continue
-        noise_image, noise_spacing = load_dicom_image(combined_files[noise_key])
+    # Process combined views: SNR from Norm-off images; Uniformity from Norm-on images
+    for orientation in ['sag', 'tra', 'cor']:
+        snr_key = (orientation, 'image', False)
+        noise_key = (orientation, 'noise', False)
+        uniform_key = (orientation, 'image', True)
 
-        # Use nema_body approach: detected circular ROI for image, central circle for noise
+        if snr_key not in combined_files:
+            logging.warning(f"No SNR image for {orientation.upper()}, skipping.")
+            continue
+        if noise_key not in combined_files:
+            logging.warning(f"No noise for {orientation.upper()}, skipping.")
+            continue
+
+        signal_path = combined_files[snr_key]
+        noise_path = combined_files[noise_key]
+
+        logging.info(f"Processing {orientation.upper()} combined SNR image: {signal_path}")
+        signal_image, signal_spacing = load_dicom_image(signal_path)
+        noise_image, noise_spacing = load_dicom_image(noise_path)
+
+        # SNR calculation using Norm-off (signal) and noise
         sig_mask = create_circular_roi_nema_style(signal_image, signal_spacing, show_plot=True)
         noise_mask = create_central_circle_roi(noise_image, noise_spacing, show_plot=True)
-
         sig_max, sig_min, sig_mean = compute_metrics(signal_image, sig_mask)
-        _, _, noise_mean = compute_metrics(noise_image, noise_mask)
         noise_std = float(np.std(noise_image[noise_mask == 1]))
-
         snr = compute_snr(sig_mean, noise_std)
-        uniformity = compute_uniformity(sig_max, sig_min)
+
+        # Uniformity calculation using Norm-on image
+        if uniform_key in combined_files:
+            uniform_path = combined_files[uniform_key]
+            logging.info(f"Processing {orientation.upper()} combined uniformity image: {uniform_path}")
+            uniform_image, uniform_spacing = load_dicom_image(uniform_path)
+            u_mask = create_circular_roi_nema_style(uniform_image, uniform_spacing, show_plot=True)
+            u_sig_max, u_sig_min, _ = compute_metrics(uniform_image, u_mask)
+            uniformity = compute_uniformity(u_sig_max, u_sig_min)
+        else:
+            logging.warning(f"No uniformity image for {orientation.upper()}, setting uniformity=0.0.")
+            uniformity = 0.0
 
         combined_results.append({
             'Region': orientation.upper(),
@@ -303,7 +297,7 @@ def process_torso_folder(folder: str) -> tuple:
         })
         logging.info(f"{orientation.upper()} - SNR: {snr}, Uniformity: {uniformity}")
 
-    # Process individual elements (unchanged from original)
+    # Process individual elements (unchanged)
     for (elem, ftype), filepath in individual_files.items():
         if ftype != 'image':
             continue
@@ -315,30 +309,34 @@ def process_torso_folder(folder: str) -> tuple:
             continue
         noise_image, noise_spacing = load_dicom_image(individual_files[noise_key])
 
-        # For individual, place 3 cm ROI at max intensity
-        sig_mask, sig_cx, sig_cy, sig_r = create_roi_mask(signal_image, signal_spacing, mode='signal', find_max_intensity=True, is_individual=True, element=elem)
-        noise_mask, noise_cx, noise_cy, noise_r = create_roi_mask(noise_image, noise_spacing, mode='noise', is_individual=True, element=elem)
+        sig_mask, sig_cx, sig_cy, sig_r = create_roi_mask(
+            signal_image, signal_spacing,
+            mode='signal', find_max_intensity=True,
+            is_individual=True, element=elem
+        )
+        noise_mask, noise_cx, noise_cy, noise_r = create_roi_mask(
+            noise_image, noise_spacing,
+            mode='noise', is_individual=True, element=elem
+        )
 
-        # Display and save signal ROI
+        # Save signal ROI visualization
         plt.figure()
         plt.imshow(signal_image, cmap='gray')
         circle_elem = plt.Circle((sig_cx, sig_cy), sig_r, color='r', fill=False, linewidth=2)
         plt.gca().add_patch(circle_elem)
         plt.title(f"Signal ROI {elem}")
         plt.axis('off')
-        plt.show()
         vis_path_sig_elem = os.path.join(vis_dir, f"{elem}_signal_roi.png")
         plt.savefig(vis_path_sig_elem, bbox_inches='tight')
         plt.close()
 
-        # Display and save noise ROI
+        # Save noise ROI visualization
         plt.figure()
         plt.imshow(noise_image, cmap='gray')
         circle_noise_elem = plt.Circle((noise_cx, noise_cy), noise_r, color='b', fill=False, linewidth=2)
         plt.gca().add_patch(circle_noise_elem)
         plt.title(f"Noise ROI {elem}")
         plt.axis('off')
-        plt.show()
         vis_path_noise_elem = os.path.join(vis_dir, f"{elem}_noise_roi.png")
         plt.savefig(vis_path_noise_elem, bbox_inches='tight')
         plt.close()
@@ -359,7 +357,6 @@ def process_torso_folder(folder: str) -> tuple:
     logging.info(f"Element Results: {element_results}")
     return combined_results, element_results
 
-
 def main():
     parser = argparse.ArgumentParser(description="Process Torso DICOM metrics")
     parser.add_argument("input_directory", type=str, help="Folder containing DICOM files")
@@ -370,12 +367,11 @@ def main():
     combined, elements = process_torso_folder(args.input_directory)
     df_combined = pd.DataFrame(combined)
     df_elements = pd.DataFrame(elements)
-    # Reorder individual elements according to ELEMENT_LABELS
+
     desired_order = [e for e in ELEMENT_LABELS if e in df_elements['Element'].values]
     df_elements = df_elements.set_index('Element').loc[desired_order].reset_index()
 
     logging.info(f"Writing {len(df_combined)} combined rows and {len(df_elements)} element rows to Excel.")
-
     with pd.ExcelWriter(args.output, engine="openpyxl") as writer:
         df_combined.to_excel(writer, index=False, sheet_name="Combined Views")
         df_elements.to_excel(writer, index=False, sheet_name="Individual Elements")
