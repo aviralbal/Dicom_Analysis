@@ -62,7 +62,7 @@ def compute_metrics(image: np.ndarray, mask: np.ndarray):
     return float(np.max(data)), float(np.min(data)), float(np.mean(data))
 
 def compute_snr(signal_mean: float, noise_std: float, is_individual: bool = False) -> float:
-    multiplier = 0.66 if is_individual else 0.66
+    multiplier = 0.66 if is_individual else 0.7
     return round(multiplier * signal_mean / noise_std, 1)
 
 def compute_uniformity(signal_max: float, signal_min: float) -> float:
@@ -273,6 +273,7 @@ def process_torso_folder(folder: str) -> tuple:
         sig_mask = create_circular_roi_nema_style(signal_image, signal_spacing, show_plot=True)
         noise_mask = create_central_circle_roi(noise_image, noise_spacing, show_plot=True)
         sig_max, sig_min, sig_mean = compute_metrics(signal_image, sig_mask)
+        sig_std = float(np.std(signal_image[sig_mask == 1]))
         noise_std = float(np.std(noise_image[noise_mask == 1]))
         snr = compute_snr(sig_mean, noise_std)
 
@@ -292,6 +293,8 @@ def process_torso_folder(folder: str) -> tuple:
             'Region': orientation.upper(),
             'Signal Max': sig_max,
             'Signal Min': sig_min,
+            'Signal Mean': sig_mean,
+            'Signal SD': sig_std,
             'SNR': snr,
             'Uniformity': uniformity
         })
