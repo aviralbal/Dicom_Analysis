@@ -272,33 +272,35 @@ def process_torso_folder(folder: str) -> tuple:
         # SNR calculation using Norm-off (signal) and noise
         sig_mask = create_circular_roi_nema_style(signal_image, signal_spacing, show_plot=True)
         noise_mask = create_central_circle_roi(noise_image, noise_spacing, show_plot=True)
-        sig_max, sig_min, sig_mean = compute_metrics(signal_image, sig_mask)
-        sig_std = float(np.std(signal_image[sig_mask == 1]))
+        sig_mean = float(np.mean(signal_image[sig_mask == 1]))  # only for SNR
         noise_std = float(np.std(noise_image[noise_mask == 1]))
         snr = compute_snr(sig_mean, noise_std)
 
-        # Uniformity calculation using Norm-on image
+        # Uniformity and signal stats using Norm-on image
         if uniform_key in combined_files:
             uniform_path = combined_files[uniform_key]
             logging.info(f"Processing {orientation.upper()} combined uniformity image: {uniform_path}")
             uniform_image, uniform_spacing = load_dicom_image(uniform_path)
             u_mask = create_circular_roi_nema_style(uniform_image, uniform_spacing, show_plot=True)
-            u_sig_max, u_sig_min, _ = compute_metrics(uniform_image, u_mask)
+            u_sig_max, u_sig_min, u_sig_mean = compute_metrics(uniform_image, u_mask)
             uniformity = compute_uniformity(u_sig_max, u_sig_min)
         else:
-            logging.warning(f"No uniformity image for {orientation.upper()}, setting uniformity=0.0.")
+            logging.warning(f"No uniformity image for {orientation.upper()}, setting uniformity=0.0 and signal stats to 0.")
             uniformity = 0.0
+            u_sig_max = 0.0
+            u_sig_min = 0.0
+            u_sig_mean = 0.0
 
         combined_results.append({
             'Region': orientation.upper(),
-            'Signal Max': sig_max,
-            'Signal Min': sig_min,
-            'Signal Mean': sig_mean,
-            'Signal SD': sig_std,
+            'Signal Max': u_sig_max,
+            'Signal Min': u_sig_min,
+            'Signal Mean': u_sig_mean,
             'SNR': snr,
             'Uniformity': uniformity
         })
-        logging.info(f"{orientation.upper()} - SNR: {snr}, Uniformity: {uniformity}")
+        logging.info(f"{orientation.upper()} - SNR: {snr}, Uniformity: {uniformity}, Max: {u_sig_max}, Min: {u_sig_min}, Mean: {u_sig_mean}")
+
 
     # Process individual elements (unchanged)
     for (elem, ftype), filepath in individual_files.items():
@@ -322,7 +324,6 @@ def process_torso_folder(folder: str) -> tuple:
             mode='noise', is_individual=True, element=elem
         )
 
-        # Save signal ROI visualization
         plt.figure()
         plt.imshow(signal_image, cmap='gray')
         circle_elem = plt.Circle((sig_cx, sig_cy), sig_r, color='r', fill=False, linewidth=2)
@@ -333,7 +334,6 @@ def process_torso_folder(folder: str) -> tuple:
         plt.savefig(vis_path_sig_elem, bbox_inches='tight')
         plt.close()
 
-        # Save noise ROI visualization
         plt.figure()
         plt.imshow(noise_image, cmap='gray')
         circle_noise_elem = plt.Circle((noise_cx, noise_cy), noise_r, color='b', fill=False, linewidth=2)
