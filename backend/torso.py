@@ -295,7 +295,7 @@ def process_torso_folder(folder: str) -> tuple:
             'Region': orientation.upper(),
             'Signal Max': u_sig_max,
             'Signal Min': u_sig_min,
-            'Signal Mean': u_sig_mean,
+            'Signal Mean': sig_mean,
             'Noise SD': noise_std,
             'SNR': snr,
             'Uniformity': uniformity
