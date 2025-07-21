@@ -334,50 +334,84 @@ def main():
     parser.add_argument("--matdir", type=str, default=None, help="Directory to save .mat files")
     args = parser.parse_args()
 
+    logging.info(f"Starting torso analysis...")
+    logging.info(f"Input directory: {args.input_directory}")
+    logging.info(f"Output file: {args.output}")
+
     # Ensure output directory exists FIRST
     output_dir = os.path.dirname(args.output)
     if output_dir:
         os.makedirs(output_dir, exist_ok=True)
+        logging.info(f"Created output directory: {output_dir}")
 
-    combined, elements = process_torso_folder(args.input_directory)
-    
-    # ALWAYS create DataFrames and output file, even if empty
-    if combined:
-        df_combined = pd.DataFrame(combined)
-    else:
-        # Create empty DataFrame with proper columns
-        df_combined = pd.DataFrame(columns=["Region", "Signal Max", "Signal Min", "Signal Mean", "Noise SD", "SNR", "Uniformity"])
-        
-    if elements:
-        df_elements = pd.DataFrame(elements)
-        desired_order = [e for e in ELEMENT_LABELS if e in df_elements['Element'].values]
-        df_elements = df_elements.set_index('Element').loc[desired_order].reset_index()
-    else:
-        # Create empty DataFrame with proper columns
-        df_elements = pd.DataFrame(columns=["Element", "Signal Mean", "Noise SD", "SNR"])
-
-    logging.info(f"Writing {len(df_combined)} combined rows and {len(df_elements)} element rows to Excel.")
-    
-    # ALWAYS create the Excel file
     try:
+        combined, elements = process_torso_folder(args.input_directory)
+        
+        # ALWAYS create DataFrames and output file, even if empty
+        if combined:
+            df_combined = pd.DataFrame(combined)
+            logging.info(f"Created combined DataFrame with {len(df_combined)} rows")
+        else:
+            # Create empty DataFrame with proper columns
+            df_combined = pd.DataFrame(columns=["Region", "Signal Max", "Signal Min", "Signal Mean", "Noise SD", "SNR", "Uniformity"])
+            logging.warning("No combined results found, creating empty DataFrame")
+            
+        if elements:
+            df_elements = pd.DataFrame(elements)
+            desired_order = [e for e in ELEMENT_LABELS if e in df_elements['Element'].values]
+            if desired_order:
+                df_elements = df_elements.set_index('Element').loc[desired_order].reset_index()
+            logging.info(f"Created elements DataFrame with {len(df_elements)} rows")
+        else:
+            # Create empty DataFrame with proper columns
+            df_elements = pd.DataFrame(columns=["Element", "Signal Mean", "Noise SD", "SNR"])
+            logging.warning("No element results found, creating empty DataFrame")
+
+        logging.info(f"Writing {len(df_combined)} combined rows and {len(df_elements)} element rows to Excel.")
+        
+        # ALWAYS create the Excel file
         with pd.ExcelWriter(args.output, engine="openpyxl") as writer:
             df_combined.to_excel(writer, index=False, sheet_name="Combined Views")
             df_elements.to_excel(writer, index=False, sheet_name="Individual Elements")
         
-        logging.info(f"Saved results to {args.output}")
+        logging.info(f"Successfully saved results to {args.output}")
         print(f"Successfully processed. Results saved to {args.output}")
-    except Exception as e:
-        logging.error(f"Failed to create Excel file: {e}")
-        print(f"Error creating Excel file: {e}")
+        
+        # Verify file was created
+        if os.path.exists(args.output):
+            file_size = os.path.getsize(args.output)
+            logging.info(f"Output file verified: {args.output} ({file_size} bytes)")
+        else:
+            logging.error(f"Output file was not created: {args.output}")
+            print(f"Error: Output file was not created: {args.output}")
 
-    if args.matdir and combined:
-        snr_list = [r['SNR'] for r in combined]
-        piu_list = [r['Uniformity'] for r in combined]
-        save_mat_output(args.matdir, 'combined', snr_list, piu_list)
-    if args.matdir and elements:
-        snr_list = [r['SNR'] for r in elements]
-        piu_list = [0] * len(elements)
-        save_mat_output(args.matdir, 'individual', snr_list, piu_list)
+        if args.matdir and combined:
+            snr_list = [r['SNR'] for r in combined]
+            piu_list = [r['Uniformity'] for r in combined]
+            save_mat_output(args.matdir, 'combined', snr_list, piu_list)
+        if args.matdir and elements:
+            snr_list = [r['SNR'] for r in elements]
+            piu_list = [0] * len(elements)
+            save_mat_output(args.matdir, 'individual', snr_list, piu_list)
+            
+    except Exception as e:
+        logging.error(f"Error in main processing: {e}")
+        print(f"Error during processing: {e}")
+        
+        # Still try to create an empty output file
+        try:
+            logging.info("Creating empty output file as fallback...")
+            with pd.ExcelWriter(args.output, engine="openpyxl") as writer:
+                empty_combined = pd.DataFrame(columns=["Region", "Signal Max", "Signal Min", "Signal Mean", "Noise SD", "SNR", "Uniformity"])
+                empty_elements = pd.DataFrame(columns=["Element", "Signal Mean", "Noise SD", "SNR"])
+                empty_combined.to_excel(writer, index=False, sheet_name="Combined Views")
+                empty_elements.to_excel(writer, index=False, sheet_name="Individual Elements")
+            logging.info(f"Created empty fallback file: {args.output}")
+            print(f"Created empty output file: {args.output}")
+        except Exception as fallback_error:
+            logging.error(f"Failed to create fallback file: {fallback_error}")
+            print(f"Failed to create output file: {fallback_error}")
+            raise
 
 if __name__ == "__main__":
     main()

@@ -5,11 +5,10 @@ import numpy as np
 import pandas as pd
 import argparse
 import logging
-# matplotlib imports removed for desktop app
 from skimage import measure, filters, morphology
 import re
 
-# Configure logging
+# Configure logging for desktop app
 log_dir = os.path.join(os.getcwd(), 'outputs')
 os.makedirs(log_dir, exist_ok=True)
 log_path = os.path.join(log_dir, 'mri_automation.log')
@@ -23,11 +22,6 @@ logging.basicConfig(
 def is_dicom_file(file_path):
     """Check if a file is a valid DICOM file by reading its header."""
     try:
-        # Skip files with .SR extension as they are structured reports, not images
-        if file_path.lower().endswith('.sr'):
-            logging.debug(f"Skipping structured report file: {file_path}")
-            return False
-            
         with open(file_path, 'rb') as f:
             preamble = f.read(132)
             if preamble[-4:] != b'DICM':
@@ -42,27 +36,21 @@ def parse_scan_id(name):
     Parse a folder name (or filename) to extract the Type and Orientation.
     Expected to contain either "noise" or "image" and one of:
       "sag", "cor", "tra" (or "tans").
-    For files that don't match the pattern, assume they are 'image' type 'Trans' orientation.
     """
     s = name.lower()
-    type_ = 'image'  # Default to image
-    orientation = 'Trans'  # Default to Trans
-    
-    # Check for type indicators
+    type_ = 'Unknown'
+    orientation = 'Unknown'
     if 'noise' in s:
         type_ = 'noise'
     elif 'image' in s:
         type_ = 'image'
-    
-    # Check for orientation indicators
     if 'sag' in s:
         orientation = 'Sagi'
     elif 'cor' in s:
         orientation = 'Coronal'
-    elif 'tra' in s or 'tans' in s or 'trans' in s:
+    elif 'tra' in s or 'tans' in s:
         orientation = 'Trans'
-    
-    logging.info(f"Parsed '{name}' as Type: {type_}, Orientation: {orientation}")
+    logging.debug(f"Parsed '{name}' as Type: {type_}, Orientation: {orientation}")
     return type_, orientation
 
 def load_dicom_image(file_path):
@@ -110,7 +98,7 @@ def create_circular_roi(image, pixel_spacing, desired_area_mm2=338*100, show_plo
     if radius_pixels < 1:
         logging.warning("Computed ROI radius is too small, defaulting to 1 pixel.")
         radius_pixels = 1
-    # Visualization removed for desktop app
+    # Plotting removed for desktop app
     Y, X = np.ogrid[:height, :width]
     mask = ((X - center_x) ** 2 + (Y - center_y) ** 2) <= radius_pixels ** 2
     return mask.astype(np.uint8)
@@ -133,7 +121,7 @@ def create_central_circle_roi(image, pixel_spacing, desired_area_mm2=340*100, sh
     # Use average pixel spacing for conversion.
     avg_spacing = (pixel_spacing[0] + pixel_spacing[1]) / 2
     r_pixels = r_mm / avg_spacing
-    # Visualization removed for desktop app
+    # Plotting removed for desktop app
     Y, X = np.ogrid[:height, :width]
     mask = ((X - center_x)**2 + (Y - center_y)**2) <= r_pixels**2
     return mask.astype(np.uint8)
@@ -183,8 +171,9 @@ def process_directory(input_directory, visualize=False):
         if os.path.isdir(item_path):
             found_subfolders = True
             type_, orientation = parse_scan_id(item)
-            # Process all folders regardless of naming pattern
-            logging.info(f"Processing subfolder '{item}' as Type: {type_}, Orientation: {orientation}")
+            if orientation == 'Unknown' or type_ == 'Unknown':
+                logging.warning(f"Subfolder '{item}' does not follow expected naming. Skipping.")
+                continue
             dicom_files = [f for f in os.listdir(item_path) if is_dicom_file(os.path.join(item_path, f))]
             if not dicom_files:
                 logging.warning(f"No DICOM files found in {item_path}. Skipping.")
@@ -230,8 +219,9 @@ def process_directory(input_directory, visualize=False):
             if not is_dicom_file(file_path):
                 continue
             type_, orientation = parse_scan_id(file)
-            # Process all files regardless of naming pattern
-            logging.info(f"Processing file '{file}' as Type: {type_}, Orientation: {orientation}")
+            if orientation == 'Unknown' or type_ == 'Unknown':
+                logging.warning(f"File '{file}' does not follow expected naming. Skipping.")
+                continue
             try:
                 image, ds = load_dicom_image(file_path)
             except Exception as e:
@@ -305,52 +295,13 @@ def main():
     parser.add_argument("--output", type=str, default="nema_body_metrics.xlsx", help="Output Excel file name")
     parser.add_argument("--visualize", action='store_true', help="Show ROI overlay plot for each image processed")
     args = parser.parse_args()
-    
-    logging.info(f"Starting NEMA body analysis with input: {args.input_directory}")
-    logging.info(f"Output file: {args.output}")
-    
-    # Ensure output directory exists FIRST
-    output_dir = os.path.dirname(args.output)
-    if output_dir:
-        os.makedirs(output_dir, exist_ok=True)
-    
     results = process_directory(args.input_directory, visualize=args.visualize)
-    
-    # ALWAYS create an output file
-    try:
-        if results:
-            df = pd.DataFrame(results)
-            df.to_excel(args.output, index=False)
-            logging.info(f"Metrics saved to {args.output}")
-            print(f"Successfully processed {len(results)} files. Results saved to {args.output}")
-        else:
-            # Create an empty results file
-            empty_df = pd.DataFrame(columns=["ScanID", "Orientation", "Type", "Mean", "Min", "Max", "Sum", "StDev", "Filename", "Slice"])
-            empty_df.to_excel(args.output, index=False)
-            logging.info(f"No valid DICOM image files found. Created empty results file: {args.output}")
-            print(f"No valid DICOM image files found. Created empty results file: {args.output}")
-    except Exception as e:
-        # If Excel writing fails, create a minimal CSV file
-        logging.error(f"Failed to create Excel file: {e}")
-        try:
-            import csv
-            csv_output = args.output.replace('.xlsx', '.csv')
-            with open(csv_output, 'w', newline='') as csvfile:
-                writer = csv.writer(csvfile)
-                writer.writerow(["ScanID", "Orientation", "Type", "Mean", "Min", "Max", "Sum", "StDev", "Filename", "Slice"])
-                if results:
-                    for result in results:
-                        writer.writerow([result.get(col, '') for col in ["ScanID", "Orientation", "Type", "Mean", "Min", "Max", "Sum", "StDev", "Filename", "Slice"]])
-            print(f"Created CSV file instead: {csv_output}")
-        except Exception as csv_e:
-            logging.error(f"Failed to create CSV file: {csv_e}")
-            # As last resort, create a text file to indicate completion
-            txt_output = args.output.replace('.xlsx', '.txt')
-            with open(txt_output, 'w') as txtfile:
-                txtfile.write("NEMA body analysis completed but no valid image files found.\n")
-                txtfile.write(f"Processed directory: {args.input_directory}\n")
-                txtfile.write(f"Number of results: {len(results) if results else 0}\n")
-            print(f"Created text file instead: {txt_output}")
+    if results:
+        df = pd.DataFrame(results)
+        df.to_excel(args.output, index=False)
+        print(f"Metrics saved to {args.output}")
+    else:
+        print("No results to save. Please check the input directory structure.")
 
 if __name__ == "__main__":
     main()

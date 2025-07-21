@@ -157,11 +157,22 @@ def process_directory(directory_path, output_excel='output_metrics.xlsx'):
         empty_df.to_excel(output_excel, index=False)
         logging.info(f"Created empty results file: {output_excel}")
 
-if __name__ == "__main__":
+def main():
+    """Main function for processing DICOM files."""
     parser = argparse.ArgumentParser(description='Process MRI DICOM images in a directory')
     parser.add_argument('input_directory', type=str, help='Path to the DICOM directory')
     parser.add_argument('--output', type=str, default='output_metrics.xlsx', help='Output Excel file')
     args = parser.parse_args()
     
+    logging.info(f"Starting weekly DICOM analysis...")
+    logging.info(f"Input directory: {args.input_directory}")
+    logging.info(f"Output file: {args.output}")
+    
     configure_logging()
     process_directory(args.input_directory, args.output)
+    
+    logging.info(f"Weekly analysis completed. Results saved to {args.output}")
+    print(f"Successfully processed. Results saved to {args.output}")
+
+if __name__ == "__main__":
+    main()
