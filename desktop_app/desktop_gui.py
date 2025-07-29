@@ -34,11 +34,14 @@ class MRIAnalysisApp:
         """Start the backend server in a separate thread."""
         def run_backend():
             try:
-                self.backend.start_server()
+                server_thread, actual_port = self.backend.start_server()
+                self.backend_url = f"http://127.0.0.1:{actual_port}"
                 time.sleep(2)  # Give server time to start
                 self.server_running = True
+                print(f"Backend server started on port {actual_port}")
             except Exception as e:
                 print(f"Failed to start backend: {e}")
+                self.server_running = False
         
         backend_thread = threading.Thread(target=run_backend, daemon=True)
         backend_thread.start()
@@ -66,13 +69,29 @@ class MRIAnalysisApp:
         self.page.update()
         file_picker.get_directory_path()
     
+    def clear_previous_results(self):
+        """Clear all previous results."""
+        self.weekly_results = None
+        self.nema_results = None
+        self.torso_results = None
+        # Clear the results display
+        if self.results_container:
+            self.results_container.controls.clear()
+            if self.page:
+                self.page.update()
+    
     def upload_files(self, folder_path):
-        """Upload files to backend."""
+        """Upload files to backend while preserving folder structure."""
+        # Clear previous results when uploading new files
+        self.clear_previous_results()
+        
         files = []
         for root, _, filenames in os.walk(folder_path):
             for filename in filenames:
                 file_path = os.path.join(root, filename)
-                files.append(('files', (filename, open(file_path, 'rb'))))
+                # Calculate relative path to preserve folder structure
+                relative_path = os.path.relpath(file_path, folder_path)
+                files.append(('files', (relative_path, open(file_path, 'rb'))))
         
         response = requests.post(f"{self.backend_url}/upload-folder/", files=files)
         for _, (_, file_obj) in files:
@@ -278,6 +297,23 @@ class MRIAnalysisApp:
                 print(f"Download failed: {response.status_code}")
         except Exception as e:
             print(f"Download error: {e}")
+    
+    def open_output_folder(self, e):
+        """Show output folder path instead of opening Finder/Explorer."""
+        try:
+            response = requests.get(f"{self.backend_url}/output-folder-path", timeout=10)
+            if response.status_code == 200:
+                folder_info = response.json()
+                folder_path = folder_info.get("path")
+
+                if folder_path and folder_info.get("exists", False):
+                    print(f"Output folder is located at: {folder_path}")
+                else:
+                    print("Output folder does not exist yet.")
+            else:
+                print("Failed to get output folder path.")
+        except Exception as ex:
+            print(f"Error retrieving folder info: {str(ex)}")
 
     def update_results_display(self):
         """Update the results display."""
@@ -393,6 +429,26 @@ class MRIAnalysisApp:
                 width=200
             )
             self.results_container.controls.append(download_btn)
+        
+        # Add "Open Output Folder" button if any results are shown
+        if (self.weekly_results is not None or 
+            self.nema_results is not None or 
+            self.torso_results is not None):
+            
+            open_folder_btn = ft.ElevatedButton(
+                "Open Output Folder",
+                icon=ft.icons.FOLDER_OPEN,
+                on_click=self.open_output_folder,
+                bgcolor=ft.colors.AMBER_600,
+                color=ft.colors.WHITE,
+                width=200
+            )
+            self.results_container.controls.append(
+                ft.Container(
+                    content=open_folder_btn,
+                    margin=ft.margin.only(top=20)
+                )
+            )
         
         if self.page:
             self.page.update()
@@ -510,7 +566,8 @@ def main():
     # Import here to avoid circular imports
     from desktop_backend import backend
     app = MRIAnalysisApp(backend)
-    ft.app(target=app.main, view=ft.AppView.FLET_APP)
+    ft.app(target=main, view=ft.WEB_BROWSER)
+
 
 if __name__ == "__main__":
     main()
