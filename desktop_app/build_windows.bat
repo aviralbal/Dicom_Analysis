@@ -31,7 +31,7 @@ pip install PyInstaller
 
 REM Build the executable
 echo Building executable...
-python build_app.py
+python build_app_cross_platform.py
 
 REM Check if build was successful
 if exist "dist\MRI_DICOM_Analysis.exe" (
