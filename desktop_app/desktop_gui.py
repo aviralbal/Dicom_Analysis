@@ -18,6 +18,7 @@ class MRIAnalysisApp:
         self.weekly_results = []
         self.nema_results = {}
         self.torso_results = {}
+        self.headneck_results = {}
         
         # UI components
         self.page = None
@@ -25,6 +26,7 @@ class MRIAnalysisApp:
         self.weekly_btn = None
         self.nema_btn = None
         self.torso_btn = None
+        self.head_neck_btn = None
         self.results_container = None
         
         # Start backend server
@@ -74,6 +76,7 @@ class MRIAnalysisApp:
         self.weekly_results = None
         self.nema_results = None
         self.torso_results = None
+        self.headneck_results = None
         # Clear the results display
         if self.results_container:
             self.results_container.controls.clear()
@@ -218,6 +221,46 @@ class MRIAnalysisApp:
         thread = threading.Thread(target=process_thread, daemon=True)
         thread.start()
     
+    def process_head_neck(self, e):
+        """Process head and neck analysis."""
+        if not self.selected_folder:
+            return
+        
+        def process_thread():
+            try:
+                # Disable button
+                self.head_neck_btn.disabled = True
+                self.head_neck_btn.text = "Processing..."
+                if self.page:
+                    self.page.update()
+                
+                # Upload and process
+                self.upload_files(self.selected_folder)
+                response = requests.post(f"{self.backend_url}/process-head-neck/", timeout=300)
+                
+                if response.status_code == 200:
+                    result = response.json()
+                    # Store results and update UI
+                    self.headneck_results = result
+                else:
+                    # Handle error but still show empty results with download option
+                    self.headneck_results = {'combined_results': [], 'element_results': []}
+                    print(f"Processing failed with status {response.status_code}: {response.text}")
+                
+                self.update_results_display()
+                
+            except Exception as e:
+                print(f"Error: {e}")
+            finally:
+                # Re-enable button
+                self.head_neck_btn.disabled = False
+                self.head_neck_btn.text = "Process Head and Neck"
+                if self.page:
+                    self.page.update()
+        
+        thread = threading.Thread(target=process_thread, daemon=True)
+        thread.start()
+    
     def create_table(self, data, headers, title, bgcolor="#1976d2"):
         """Create a simple data table."""
         if not data:
@@ -293,6 +336,22 @@ class MRIAnalysisApp:
                 with open(file_path, 'wb') as f:
                     f.write(response.content)
                 print(f"Torso results downloaded to: {file_path}")
+            else:
+                print(f"Download failed: {response.status_code}")
+        except Exception as e:
+            print(f"Download error: {e}")
+    
+    def download_headneck_results(self, e):
+        """Download head and neck results."""
+        try:
+            response = requests.get(f"{self.backend_url}/download-head-neck", timeout=30)
+            if response.status_code == 200:
+                # Save file to Downloads folder
+                downloads_path = os.path.join(os.path.expanduser("~"), "Downloads")
+                file_path = os.path.join(downloads_path, "headneck_analysis.xlsx")
+                with open(file_path, 'wb') as f:
+                    f.write(response.content)
+                print(f"Head & Neck results downloaded to: {file_path}")
             else:
                 print(f"Download failed: {response.status_code}")
         except Exception as e:
@@ -430,10 +489,54 @@ class MRIAnalysisApp:
             )
             self.results_container.controls.append(download_btn)
         
+        # Show head & neck results
+        if self.headneck_results is not None:
+            has_results = False
+            
+            # Combined views
+            if self.headneck_results.get('combined_results'):
+                table = self.create_table(
+                    self.headneck_results['combined_results'],
+                    ["Region", "Signal Max", "Signal Min", "Signal Mean", "Noise SD", "SNR", "Uniformity"],
+                    "Head & Neck Results - Combined Views",
+                    ft.colors.ORANGE_600
+                )
+                self.results_container.controls.append(table)
+                has_results = True
+            
+            # Individual elements
+            if self.headneck_results.get('element_results'):
+                table = self.create_table(
+                    self.headneck_results['element_results'],
+                    ["Element", "Signal Mean", "Noise SD", "SNR"],
+                    "Head & Neck Results - Individual Elements",
+                    ft.colors.ORANGE_600
+                )
+                self.results_container.controls.append(table)
+                has_results = True
+            
+            if not has_results:
+                self.results_container.controls.append(
+                    ft.Text("Head & Neck Processing: No valid DICOM files found", 
+                           size=16, color=ft.colors.ORANGE_600, weight=ft.FontWeight.BOLD)
+                )
+            
+            # Add download button for head & neck results
+            download_btn = ft.ElevatedButton(
+                "Download Head & Neck Results",
+                icon=ft.icons.DOWNLOAD,
+                on_click=self.download_headneck_results,
+                bgcolor=ft.colors.ORANGE_600,
+                color=ft.colors.WHITE,
+                width=250
+            )
+            self.results_container.controls.append(download_btn)
+        
         # Add "Open Output Folder" button if any results are shown
         if (self.weekly_results is not None or 
             self.nema_results is not None or 
-            self.torso_results is not None):
+            self.torso_results is not None or 
+            self.headneck_results is not None):
             
             open_folder_btn = ft.ElevatedButton(
                 "Open Output Folder",
@@ -498,6 +601,15 @@ class MRIAnalysisApp:
             height=50
         )
         
+        self.head_neck_btn = ft.ElevatedButton(
+            "Process Head and Neck",
+            on_click=self.process_head_neck,
+            bgcolor=ft.colors.ORANGE_600,
+            color=ft.colors.WHITE,
+            width=200,
+            height=50
+        )
+        
         self.results_container = ft.Column(
             spacing=20,
             scroll=ft.ScrollMode.AUTO,
@@ -545,7 +657,8 @@ class MRIAnalysisApp:
                     content=ft.Row([
                         self.weekly_btn,
                         self.nema_btn,
-                        self.torso_btn
+                        self.torso_btn,
+                        self.head_neck_btn
                     ], alignment=ft.MainAxisAlignment.CENTER, spacing=20),
                     margin=ft.margin.only(bottom=20)
                 ),

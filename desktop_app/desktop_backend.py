@@ -76,6 +76,7 @@ class DesktopBackend:
             "output_metrics.xlsx",
             "nema_body_metrics.xlsx",
             "torso_coil_analysis.xlsx",
+            "headneck_analysis.xlsx",
             "roi_overlay.png"
         ]
         for file in output_files:
@@ -200,6 +201,38 @@ class DesktopBackend:
                 logging.error(f"Error in process_torso: {e}")
                 raise HTTPException(status_code=500, detail="Unexpected server error.")
 
+        @self.app.post("/process-head-neck/")
+        async def process_head_neck():
+            if not os.path.exists(self.UPLOAD_FOLDER) or not os.listdir(self.UPLOAD_FOLDER):
+                raise HTTPException(status_code=400, detail="No files found in uploads directory.")
+            try:
+                output_excel = os.path.join(self.OUTPUT_FOLDER, "headneck_analysis.xlsx")
+                self.clear_output_files()
+                
+                # Import and call function directly instead of using subprocess
+                import head_neck
+                combined, elements = head_neck.process_hn_folder(self.UPLOAD_FOLDER)
+                
+                # Create DataFrames and save to Excel
+                df_combined = pd.DataFrame(combined)
+                df_elements = pd.DataFrame(elements)
+                
+                with pd.ExcelWriter(output_excel, engine="openpyxl") as writer:
+                    df_combined.to_excel(writer, index=False, sheet_name="Combined Views")
+                    df_elements.to_excel(writer, index=False, sheet_name="Individual Elements")
+                
+                combined_fixed = self.fix_floats(combined)
+                elements_fixed = self.fix_floats(elements)
+                return {
+                    "message": "Head & Neck processing completed.",
+                    "combined_results": combined_fixed,
+                    "element_results": elements_fixed,
+                    "excel_url": "/download-head-neck"
+                }
+            except Exception as e:
+                logging.error(f"Error in process_head_neck: {e}")
+                raise HTTPException(status_code=500, detail="Unexpected server error.")
+
         @self.app.get("/download-metrics")
         async def download_metrics():
             excel_path = os.path.join(self.OUTPUT_FOLDER, "output_metrics.xlsx")
@@ -232,6 +265,25 @@ class DesktopBackend:
                 media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 filename="torso_coil_analysis.xlsx"
             )
+
+        @self.app.get("/download-head-neck")
+        async def download_head_neck():
+            excel_path = os.path.join(self.OUTPUT_FOLDER, "headneck_analysis.xlsx")
+            if not os.path.exists(excel_path):
+                raise HTTPException(status_code=404, detail="Head & Neck analysis file not found.")
+            return FileResponse(
+                excel_path,
+                media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                filename="headneck_analysis.xlsx"
+            )
+
+        @self.app.get("/output-folder-path")
+        async def get_output_folder_path():
+            output_folder_path = os.path.abspath(self.OUTPUT_FOLDER)
+            return {
+                "path": output_folder_path,
+                "exists": os.path.exists(output_folder_path)
+            }
 
     def start_server(self):
         self.actual_port = self.find_available_port()
