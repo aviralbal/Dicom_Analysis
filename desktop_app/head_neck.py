@@ -32,7 +32,7 @@ ELEMENT_LABELS = [
 ]
 
 NOISE_AREA_MM2 = 340 * 100        # 340 cm^2 = 34000 mm^2 (noise)
-NEMA_SIGNAL_AREA_MM2 = 340 * 100  # 338 cm^2 (combined signal ROI)
+NEMA_SIGNAL_AREA_MM2 = 338 * 100  # 338 cm^2 (combined signal ROI)
 SIGNAL_RADIUS_MM = 3              # 3 mm individual signal radius
 SNR_MULTIPLIER = 0.7              # HN uses 0.7 everywhere
 
