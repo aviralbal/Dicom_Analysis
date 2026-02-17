@@ -10,34 +10,30 @@ import scipy.io as sio
 import pydicom
 from skimage import measure, filters, morphology
 
-# --------------------------- Logging ---------------------------
-def configure_logging():
-    today_str = datetime.datetime.now().strftime("%Y_%m_%d")
-    log_dir = os.path.join(os.getcwd(), 'outputs')
-    os.makedirs(log_dir, exist_ok=True)
-    log_path = os.path.join(log_dir, 'headneck_automation.log')
-    logging.basicConfig(
-        level=logging.DEBUG,
-        format='%(asctime)s:%(levelname)s:%(message)s',
-        filename=log_path,
-        filemode='w'
-    )
+# Configure logging
+today_str = datetime.datetime.now().strftime("%Y_%m_%d")
+log_dir = os.path.join(os.getcwd(), 'outputs')
+os.makedirs(log_dir, exist_ok=True)
+log_path = os.path.join(log_dir, 'headneck_automation.log')
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s:%(levelname)s:%(message)s',
+    filename=log_path,
+    filemode='w'
+)
 
-# --------------------------- Constants ---------------------------
-# Head & Neck elements (10): same names as torso minus VAP3, VPP3
+# Constants
 ELEMENT_LABELS = [
     "VAS1", "VAS2", "VAS3",
     "VPS1", "VPS2", "VPS3",
     "VAP1", "VAP2",
     "VPP1", "VPP2"
 ]
-
 NOISE_AREA_MM2 = 340 * 100        # 340 cm^2 = 34000 mm^2 (noise)
 NEMA_SIGNAL_AREA_MM2 = 338 * 100  # 338 cm^2 (combined signal ROI)
 SIGNAL_RADIUS_MM = 3              # 3 mm individual signal radius
-SNR_MULTIPLIER = 0.7              # HN uses 0.7 everywhere
 
-# --------------------------- Helpers ---------------------------
+# Helper Functions
 def is_dicom_file(file_path: str) -> bool:
     try:
         with open(file_path, 'rb') as f:
@@ -52,8 +48,6 @@ def is_dicom_file(file_path: str) -> bool:
 def load_dicom_image(file_path: str):
     ds = pydicom.dcmread(file_path)
     image = ds.pixel_array.astype(np.float64)
-    if 'RescaleSlope' in ds and 'RescaleIntercept' in ds:
-        image = image * ds.RescaleSlope + ds.RescaleIntercept
     pixel_spacing = get_pixel_spacing(ds)
     return image, pixel_spacing
 
@@ -62,16 +56,16 @@ def get_pixel_spacing(ds) -> list:
         return [float(ds.PixelSpacing[0]), float(ds.PixelSpacing[1])]
     return [1.0, 1.0]
 
+def normalize_label(label: str) -> str:
+    return re.sub(r'[^a-z]', '', label.lower())
+
 def compute_metrics(image: np.ndarray, mask: np.ndarray):
     data = image[mask == 1]
-    if data.size == 0:
-        return 0.0, 0.0, 0.0
     return float(np.max(data)), float(np.min(data)), float(np.mean(data))
 
-def compute_snr(signal_mean: float, noise_std: float) -> float:
-    if noise_std == 0:
-        return 0.0
-    return round(SNR_MULTIPLIER * signal_mean / noise_std, 1)
+def compute_snr(signal_mean: float, noise_std: float, is_individual: bool = False) -> float:
+    multiplier = 0.66 if is_individual else 0.7
+    return round(multiplier * signal_mean / noise_std, 1)
 
 def compute_uniformity(signal_max: float, signal_min: float) -> float:
     denom = signal_max + signal_min
@@ -88,117 +82,137 @@ def detect_circular_object(image):
     if not regions:
         logging.warning("No circular object detected. Using image center as fallback.")
         return image.shape[0] // 2, image.shape[1] // 2, min(image.shape) // 4
-    largest = max(regions, key=lambda r: r.area)
-    center_y, center_x = largest.centroid
-    radius = np.sqrt(largest.area / np.pi)
+    largest_region = max(regions, key=lambda r: r.area)
+    center_y, center_x = largest_region.centroid
+    radius = np.sqrt(largest_region.area / np.pi)
     return int(center_y), int(center_x), int(radius)
 
-def create_circular_roi_nema_style(image, pixel_spacing, desired_area_mm2=NEMA_SIGNAL_AREA_MM2):
+def create_circular_roi_nema_style(image, pixel_spacing, desired_area_mm2=338*100, show_plot=False):
     height, width = image.shape
+    x_spacing, y_spacing = pixel_spacing
     radius_mm = np.sqrt(desired_area_mm2 / np.pi)
-    avg_spacing = (pixel_spacing[0] + pixel_spacing[1]) / 2
-    radius_px = max(1, round(radius_mm / avg_spacing))
-    cy, cx, obj_r = detect_circular_object(image)
-    cy = min(cy + 3, height - radius_px - 1)
-    radius_px = min(radius_px, max(1, obj_r - 2))
+    radius_pixels = max(1, round(radius_mm / x_spacing))
+    center_y, center_x, object_radius = detect_circular_object(image)
+    center_y = min(center_y + 3, height - radius_pixels - 1)
+    radius_pixels = min(radius_pixels, object_radius - 2)
+    if radius_pixels < 1:
+        logging.warning("Computed ROI radius is too small, defaulting to 1 pixel.")
+        radius_pixels = 1
     Y, X = np.ogrid[:height, :width]
-    mask = ((X - cx) ** 2 + (Y - cy) ** 2) <= radius_px ** 2
+    mask = ((X - center_x) ** 2 + (Y - center_y) ** 2) <= radius_pixels ** 2
     return mask.astype(np.uint8)
 
-def create_central_circle_roi(image, pixel_spacing, desired_area_mm2=NOISE_AREA_MM2):
+def create_central_circle_roi(image, pixel_spacing, desired_area_mm2=NOISE_AREA_MM2, show_plot=False):
     height, width = image.shape
-    cy, cx = height // 2, width // 2
+    center_y, center_x = height // 2, width // 2
     r_mm = np.sqrt(desired_area_mm2 / np.pi)
     avg_spacing = (pixel_spacing[0] + pixel_spacing[1]) / 2
-    r_px = max(1, int(round(r_mm / avg_spacing)))
+    r_pixels = r_mm / avg_spacing
     Y, X = np.ogrid[:height, :width]
-    mask = ((X - cx) ** 2 + (Y - cy) ** 2) <= r_px ** 2
+    mask = ((X - center_x) ** 2 + (Y - center_y) ** 2) <= r_pixels ** 2
     return mask.astype(np.uint8)
 
-def create_roi_mask(image: np.ndarray, pixel_spacing: list,
-                    mode: str = 'noise',
-                    radius_mm: int = SIGNAL_RADIUS_MM,
-                    area_mm2: int = NOISE_AREA_MM2,
-                    find_max_intensity: bool = False) -> tuple:
+def create_roi_mask(
+    image: np.ndarray,
+    pixel_spacing: list,
+    mode: str = 'noise',
+    radius_mm: int = SIGNAL_RADIUS_MM,
+    area_mm2: int = NOISE_AREA_MM2,
+    find_max_intensity: bool = False,
+    is_individual: bool = False,
+    element: str = None
+) -> tuple:
     height, width = image.shape
     avg_spacing = (pixel_spacing[0] + pixel_spacing[1]) / 2
+
     if mode == 'signal':
-        r_pixels = max(1, radius_mm / avg_spacing)
+        r_pixels = radius_mm / avg_spacing
     else:
         r_mm = np.sqrt(area_mm2 / np.pi)
-        r_pixels = max(1, r_mm / avg_spacing)
-    cy, cx = height // 2, width // 2
-    if mode == 'signal' and find_max_intensity:
-        phantom = image > 0
-        if np.any(phantom):
-            masked = np.where(phantom, image, -np.inf)
-            cy, cx = np.unravel_index(np.argmax(masked), masked.shape)
-    margin = int(r_pixels) + 5
-    cx = max(margin, min(width - margin, cx))
-    cy = max(margin, min(height - margin, cy))
-    Y, X = np.ogrid[:height, :width]
-    mask = ((X - cx) ** 2 + (Y - cy) ** 2) <= r_pixels ** 2
-    return mask.astype(np.uint8), cx, cy, r_pixels
+        r_pixels = r_mm / avg_spacing
 
-# --------------------------- Classification ---------------------------
+    center_y, center_x = height // 2, width // 2
+
+    if mode == 'signal' and find_max_intensity:
+        phantom_mask = image > 0
+        if np.any(phantom_mask):
+            masked_image = np.where(phantom_mask, image, 0)
+            max_idx = np.unravel_index(np.argmax(masked_image), masked_image.shape)
+            center_y, center_x = max_idx
+        else:
+            logging.warning("Signal fallback: no phantom detected.")
+
+    margin = int(r_pixels) + 5
+    center_x = max(margin, min(width - margin, center_x))
+    center_y = max(margin, min(height - margin, center_y))
+
+    Y, X = np.ogrid[:height, :width]
+    mask = ((X - center_x) ** 2 + (Y - center_y) ** 2) <= r_pixels ** 2
+
+    if mode == 'signal':
+        logging.debug(f"Signal ROI at ({center_x}, {center_y}), radius: {r_pixels:.1f} pixels")
+        data = image[mask]
+        if data.size > 0:
+            logging.debug(f"Signal ROI values - min: {np.min(data):.1f}, max: {np.max(data):.1f}, mean: {np.mean(data):.1f}")
+    else:
+        logging.debug(f"Noise ROI at center ({center_x}, {center_y}), radius: {r_pixels:.1f} pixels")
+        data = image[mask]
+        if data.size > 0:
+            logging.debug(f"Noise ROI stats - mean: {np.mean(data):.1f}, std: {np.std(data):.1f}, min: {np.min(data):.1f}, max: {np.max(data):.1f}")
+
+    return mask.astype(np.uint8), center_x, center_y, r_pixels
+
 def classify_files(files: list) -> tuple:
-    """
-    Return:
-      combined[(orientation, ftype, is_norm)] = path
-      individual[(elem, ftype, is_norm)] = path
-    ftype: 'image' or 'noise'
-    is_norm: True if ImageType contains 'NORM'
-    """
     combined = {}
     individual = {}
 
     for f in files:
         try:
-            ds = pydicom.dcmread(f, stop_before_pixels=True, force=True)
-            series_desc = getattr(ds, "SeriesDescription", "")
-            sdl = series_desc.lower()
+            ds = pydicom.dcmread(f, stop_before_pixels=True)
+            series_desc = getattr(ds, "SeriesDescription", "").lower()
             coil_elem = ds.get((0x0051, 0x100F))
             coil_string = coil_elem.value if coil_elem is not None else ""
 
-            # skip pure black frames (HN has 2)
-            try:
-                arr = pydicom.dcmread(f).pixel_array
-                if np.max(arr) == 0:
-                    logging.info(f"Skipping black image: {f}")
-                    continue
-            except Exception:
-                pass
+            orientation = next((ori for ori in ['tra', 'sag', 'cor'] if ori in series_desc), None)
+            coil_labels = [c.strip() for c in coil_string.split(';') if c.strip()]
 
-            # norm flag
+            # detect Norm filter from ImageType tag
             is_norm = False
             if hasattr(ds, 'ImageType'):
-                try:
-                    types = [t.upper() for t in ds.ImageType]
-                    is_norm = 'NORM' in types
-                except Exception:
-                    pass
-
-            # element vs combined
-            coil_labels = [c.strip() for c in coil_string.split(';') if c.strip()]
-            orientation = next((ori for ori in ['tra', 'sag', 'cor'] if ori in sdl), None)
+                types = [t.upper() for t in ds.ImageType]
+                if 'NORM' in types:
+                    is_norm = True
 
             if len(coil_labels) == 1 and coil_labels[0] in ELEMENT_LABELS:
                 elem = coil_labels[0]
-                ftype = 'noise' if ('noise' in sdl or 'noise' in f.lower()) else 'image'
-                individual[(elem, ftype, is_norm)] = f
-                logging.debug(f"[Individual] {f} -> ({elem}, {ftype}, norm={is_norm})")
+                ftype = 'noise' if 'noise' in series_desc or 'noise' in f.lower() else 'image'
+                individual[(elem, ftype)] = f
+                logging.debug(f"[Individual] {f} -> ({elem}, {ftype})")
             elif orientation:
-                ftype = 'noise' if ('noise' in sdl or 'noise' in f.lower()) else 'image'
+                ftype = 'noise' if 'noise' in series_desc or 'noise' in f.lower() else 'image'
                 combined[(orientation, ftype, is_norm)] = f
                 logging.debug(f"[Combined] {f} -> ({orientation}, {ftype}, norm={is_norm})")
             else:
-                logging.debug(f"Unclassified file: {f} | SeriesDescription='{series_desc}'")
+                logging.warning(f"Unclassified file: {f}")
         except Exception as e:
             logging.error(f"Error reading {f}: {e}")
     return combined, individual
 
-# --------------------------- Processing ---------------------------
+def save_mat_output(results_dir: str, coil_type: str, snr_list: list, piu_list: list):
+    mat_data = {
+        "SNR": snr_list,
+        "PIU": piu_list,
+        "date": today_str,
+        "coil_type": coil_type,
+        "filter_used": "no_prescan"
+    }
+    os.makedirs(results_dir, exist_ok=True)
+    mat_path = os.path.join(results_dir, f"SNR_PIU_{today_str}_{coil_type}_no_prescan.mat")
+    sio.savemat(mat_path, mat_data)
+    logging.info(f"Saved .mat to {mat_path}")
+
 def process_hn_folder(folder: str) -> tuple:
+
     dicom_files = []
     for root, _, files in os.walk(folder):
         for f in files:
@@ -211,96 +225,112 @@ def process_hn_folder(folder: str) -> tuple:
         return [], []
 
     combined_files, individual_files = classify_files(dicom_files)
-    logging.info(f"Combined keys: {list(combined_files.keys())}")
-    logging.info(f"Individual keys: {list(individual_files.keys())}")
+    logging.info(f"Classified Combined keys: {list(combined_files.keys())}")
+    logging.info(f"Classified Individual keys: {list(individual_files.keys())}")
 
     combined_results = []
     element_results = []
 
-    # ----- Combined views -----
-    # HN: SNR signal = normalized (is_norm=True); noise = unnormalized (False)
+    # Process combined views: SNR from Norm-off images; Uniformity from Norm-on images
     for orientation in ['sag', 'tra', 'cor']:
-        sig_key = (orientation, 'image', True)     # prefer normalized
-        noi_key = (orientation, 'noise', False)    # prefer unnormalized
-        uni_key = (orientation, 'image', True)
+        snr_key = (orientation, 'image', False)
+        noise_key = (orientation, 'noise', False)
+        uniform_key = (orientation, 'image', True)
 
-        if sig_key not in combined_files or noi_key not in combined_files:
-            logging.warning(f"Missing SNR pair for {orientation.upper()}, skipping.")
+        if snr_key not in combined_files:
+            logging.warning(f"No SNR image for {orientation.upper()}, skipping.")
+            continue
+        if noise_key not in combined_files:
+            logging.warning(f"No noise for {orientation.upper()}, skipping.")
             continue
 
-        sig_img, sig_sp = load_dicom_image(combined_files[sig_key])
-        noi_img, noi_sp = load_dicom_image(combined_files[noi_key])
+        signal_path = combined_files[snr_key]
+        noise_path = combined_files[noise_key]
 
-        sig_mask = create_circular_roi_nema_style(sig_img, sig_sp)
-        noi_mask = create_central_circle_roi(noi_img, noi_sp)
-        sig_mean = float(np.mean(sig_img[sig_mask == 1]))
-        noi_std  = float(np.std(noi_img[noi_mask == 1]))
-        snr = compute_snr(sig_mean, noi_std)
+        logging.info(f"Processing {orientation.upper()} combined SNR image: {signal_path}")
+        signal_image, signal_spacing = load_dicom_image(signal_path)
+        noise_image, noise_spacing = load_dicom_image(noise_path)
 
-        # Uniformity from normalized image
-        if uni_key in combined_files:
-            uni_img, uni_sp = load_dicom_image(combined_files[uni_key])
-            u_mask = create_circular_roi_nema_style(uni_img, uni_sp)
-            u_max, u_min, u_mean = compute_metrics(uni_img, u_mask)
-            uniformity = compute_uniformity(u_max, u_min)
+        # SNR calculation using Norm-off (signal) and noise
+        sig_mask = create_circular_roi_nema_style(signal_image, signal_spacing, show_plot=False)
+        noise_mask = create_central_circle_roi(noise_image, noise_spacing, show_plot=False)
+        sig_mean = float(np.mean(signal_image[sig_mask == 1]))  # only for SNR
+        noise_std = float(np.std(noise_image[noise_mask == 1]))
+        snr = compute_snr(sig_mean, noise_std)
+
+        # Uniformity and signal stats using Norm-on image
+        if uniform_key in combined_files:
+            uniform_path = combined_files[uniform_key]
+            logging.info(f"Processing {orientation.upper()} combined uniformity image: {uniform_path}")
+            uniform_image, uniform_spacing = load_dicom_image(uniform_path)
+            u_mask = create_circular_roi_nema_style(uniform_image, uniform_spacing, show_plot=False)
+            u_sig_max, u_sig_min, u_sig_mean = compute_metrics(uniform_image, u_mask)
+            uniformity = compute_uniformity(u_sig_max, u_sig_min)
         else:
-            u_max = u_min = u_mean = 0.0
+            logging.warning(f"No uniformity image for {orientation.upper()}, setting uniformity=0.0 and signal stats to 0.")
             uniformity = 0.0
+            u_sig_max = 0.0
+            u_sig_min = 0.0
+            u_sig_mean = 0.0
 
         combined_results.append({
             'Region': orientation.upper(),
-            'Signal Max': u_max,
-            'Signal Min': u_min,
-            'Signal Mean': u_mean,
-            'Noise SD': noi_std,
+            'Signal Max': u_sig_max,
+            'Signal Min': u_sig_min,
+            'Signal Mean': u_sig_mean,
+            'Noise SD': noise_std,
             'SNR': snr,
             'Uniformity': uniformity
         })
+        logging.info(f"{orientation.upper()} - SNR: {snr}, Uniformity: {uniformity}, Max: {u_sig_max}, Min: {u_sig_min}, Mean: {u_sig_mean}")
 
-    # ----- Individual elements -----
-    # Prefer normalized image if present, else fall back; prefer unnormalized noise.
-    for el in ELEMENT_LABELS:
-        img_path = individual_files.get((el, 'image', True))  # normalized
-        if img_path is None:
-            img_path = individual_files.get((el, 'image', False))
-        noise_path = individual_files.get((el, 'noise', False))  # unnormalized preferred
-        if noise_path is None:
-            noise_path = individual_files.get((el, 'noise', True))
 
-        if not img_path or not noise_path:
-            logging.warning(f"Missing individual pair for {el}: image={bool(img_path)}, noise={bool(noise_path)}")
+    # Process individual elements (unchanged)
+    for (elem, ftype), filepath in individual_files.items():
+        if ftype != 'image':
             continue
+        logging.info(f"Processing individual element {elem}: {filepath}")
+        signal_image, signal_spacing = load_dicom_image(filepath)
+        noise_key = (elem, 'noise')
+        if noise_key not in individual_files:
+            logging.warning(f"No noise for {elem}, skipping.")
+            continue
+        noise_image, noise_spacing = load_dicom_image(individual_files[noise_key])
 
-        img, sp_i = load_dicom_image(img_path)
-        noi, sp_n = load_dicom_image(noise_path)
+        sig_mask, sig_cx, sig_cy, sig_r = create_roi_mask(
+            signal_image, signal_spacing,
+            mode='signal', find_max_intensity=True,
+            is_individual=True, element=elem
+        )
+        noise_mask, noise_cx, noise_cy, noise_r = create_roi_mask(
+            noise_image, noise_spacing,
+            mode='noise', is_individual=True, element=elem
+        )
 
-        sig_mask, *_ = create_roi_mask(img, sp_i, mode='signal', find_max_intensity=True)
-        noi_mask, *_ = create_roi_mask(noi, sp_n, mode='noise')
-
-        _, _, sig_mean = compute_metrics(img, sig_mask)
-        noi_sd = float(np.std(noi[noi_mask == 1]))
-        snr = compute_snr(sig_mean, noi_sd)
+        _, _, sig_mean = compute_metrics(signal_image, sig_mask)
+        noise_std = float(np.std(noise_image[noise_mask == 1]))
+        snr = compute_snr(sig_mean, noise_std, is_individual=True)
 
         element_results.append({
-            'Element': el,
+            'Element': elem,
             'Signal Mean': sig_mean,
-            'Noise SD': noi_sd,
+            'Noise SD': noise_std,
             'SNR': snr
         })
+        logging.info(f"{elem} - SNR: {snr}")
 
-    logging.info(f"Combined n={len(combined_results)} | Individual n={len(element_results)}")
+    logging.info(f"Combined Results: {combined_results}")
+    logging.info(f"Element Results: {element_results}")
     return combined_results, element_results
 
-# --------------------------- CLI ---------------------------
 def main():
-    parser = argparse.ArgumentParser(description="Process Head & Neck DICOM metrics (HN)")
+    parser = argparse.ArgumentParser(description="Process Head & Neck DICOM metrics")
     parser.add_argument("input_directory", type=str, help="Folder containing DICOM files")
     parser.add_argument("--output", type=str, default="headneck_coil_analysis.xlsx", help="Excel output file")
     parser.add_argument("--matdir", type=str, default=None, help="Directory to save .mat files")
     args = parser.parse_args()
 
-    configure_logging()
-    logging.info(f"Starting HN analysis...")
+    logging.info(f"Starting head & neck analysis...")
     logging.info(f"Input directory: {args.input_directory}")
     logging.info(f"Output file: {args.output}")
 
@@ -312,51 +342,67 @@ def main():
 
     try:
         combined, elements = process_hn_folder(args.input_directory)
-
+        
         # ALWAYS create DataFrames and output file, even if empty
-        df_combined = pd.DataFrame(combined) if combined else pd.DataFrame(
-            columns=["Region", "Signal Max", "Signal Min", "Signal Mean", "Noise SD", "SNR", "Uniformity"])
-        df_elements = pd.DataFrame(elements) if elements else pd.DataFrame(
-            columns=["Element", "Signal Mean", "Noise SD", "SNR"])
-
-        # Order elements like torso
-        if not df_elements.empty and "Element" in df_elements:
-            desired_order = [e for e in ELEMENT_LABELS if e in df_elements["Element"].values]
+        if combined:
+            df_combined = pd.DataFrame(combined)
+            logging.info(f"Created combined DataFrame with {len(df_combined)} rows")
+        else:
+            # Create empty DataFrame with proper columns
+            df_combined = pd.DataFrame(columns=["Region", "Signal Max", "Signal Min", "Signal Mean", "Noise SD", "SNR", "Uniformity"])
+            logging.warning("No combined results found, creating empty DataFrame")
+            
+        if elements:
+            df_elements = pd.DataFrame(elements)
+            desired_order = [e for e in ELEMENT_LABELS if e in df_elements['Element'].values]
             if desired_order:
-                df_elements = df_elements.set_index("Element").loc[desired_order].reset_index()
+                df_elements = df_elements.set_index('Element').loc[desired_order].reset_index()
+            logging.info(f"Created elements DataFrame with {len(df_elements)} rows")
+        else:
+            # Create empty DataFrame with proper columns
+            df_elements = pd.DataFrame(columns=["Element", "Signal Mean", "Noise SD", "SNR"])
+            logging.warning("No element results found, creating empty DataFrame")
 
+        logging.info(f"Writing {len(df_combined)} combined rows and {len(df_elements)} element rows to Excel.")
+        
+        # ALWAYS create the Excel file
         with pd.ExcelWriter(args.output, engine="openpyxl") as writer:
             df_combined.to_excel(writer, index=False, sheet_name="Combined Views")
             df_elements.to_excel(writer, index=False, sheet_name="Individual Elements")
-
+        
+        logging.info(f"Successfully saved results to {args.output}")
         print(f"Successfully processed. Results saved to {args.output}")
+        
+        # Verify file was created
+        if os.path.exists(args.output):
+            file_size = os.path.getsize(args.output)
+            logging.info(f"Output file verified: {args.output} ({file_size} bytes)")
+        else:
+            logging.error(f"Output file was not created: {args.output}")
+            print(f"Error: Output file was not created: {args.output}")
 
         if args.matdir and combined:
-            today_str = datetime.datetime.now().strftime("%Y_%m_%d")
-            os.makedirs(args.matdir, exist_ok=True)
-            sio.savemat(os.path.join(args.matdir, f"SNR_PIU_{today_str}_combined_no_prescan.mat"), {
-                "SNR": df_combined["SNR"].to_numpy() if "SNR" in df_combined else np.array([]),
-                "PIU": df_combined["Uniformity"].to_numpy() if "Uniformity" in df_combined else np.array([]),
-                "date": today_str, "coil_type": "combined", "filter_used": "no_prescan"
-            })
+            snr_list = [r['SNR'] for r in combined]
+            piu_list = [r['Uniformity'] for r in combined]
+            save_mat_output(args.matdir, 'combined', snr_list, piu_list)
         if args.matdir and elements:
-            today_str = datetime.datetime.now().strftime("%Y_%m_%d")
-            os.makedirs(args.matdir, exist_ok=True)
-            sio.savemat(os.path.join(args.matdir, f"SNR_PIU_{today_str}_individual_no_prescan.mat"), {
-                "SNR": df_elements["SNR"].to_numpy() if "SNR" in df_elements else np.array([]),
-                "PIU": np.zeros(len(df_elements)), "date": today_str, "coil_type": "individual", "filter_used": "no_prescan"
-            })
-
+            snr_list = [r['SNR'] for r in elements]
+            piu_list = [0] * len(elements)
+            save_mat_output(args.matdir, 'individual', snr_list, piu_list)
+            
     except Exception as e:
         logging.error(f"Error in main processing: {e}")
         print(f"Error during processing: {e}")
-        # still create empty output so downstream doesn't break
+        
+        # Still try to create an empty output file
         try:
+            logging.info("Creating empty output file as fallback...")
             with pd.ExcelWriter(args.output, engine="openpyxl") as writer:
                 empty_combined = pd.DataFrame(columns=["Region", "Signal Max", "Signal Min", "Signal Mean", "Noise SD", "SNR", "Uniformity"])
                 empty_elements = pd.DataFrame(columns=["Element", "Signal Mean", "Noise SD", "SNR"])
                 empty_combined.to_excel(writer, index=False, sheet_name="Combined Views")
                 empty_elements.to_excel(writer, index=False, sheet_name="Individual Elements")
+            logging.info(f"Created empty fallback file: {args.output}")
             print(f"Created empty output file: {args.output}")
         except Exception as fallback_error:
             logging.error(f"Failed to create fallback file: {fallback_error}")
