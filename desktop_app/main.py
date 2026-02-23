@@ -37,7 +37,7 @@ try:
         
         # Create and run the Flet application
         app = MRIAnalysisApp(backend)
-        ft.app(target=app.main, view=ft.AppView.FLET_APP)
+        ft.run(app.main, view=ft.AppView.FLET_APP)
 
     if __name__ == "__main__":
         main()

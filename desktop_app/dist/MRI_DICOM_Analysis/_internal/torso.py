@@ -15,7 +15,7 @@ from skimage import measure, filters, morphology
 today_str = datetime.datetime.now().strftime("%Y_%m_%d")
 log_dir = os.path.join(os.getcwd(), 'outputs')
 os.makedirs(log_dir, exist_ok=True)
-log_path = os.path.join(log_dir, 'headneck_automation.log')
+log_path = os.path.join(log_dir, 'torso_automation.log')
 logging.basicConfig(
     level=logging.DEBUG,
     format='%(asctime)s:%(levelname)s:%(message)s',
@@ -23,16 +23,14 @@ logging.basicConfig(
     filemode='w'
 )
 
-# Constants - Head & Neck elements (10): same names as torso minus VAP3, VPP3
+# Constants
 ELEMENT_LABELS = [
     "VAS1", "VAS2", "VAS3",
     "VPS1", "VPS2", "VPS3",
-    "VAP1", "VAP2",
-    "VPP1", "VPP2"
+    "VAP1", "VAP2", "VAP3",
+    "VPP1", "VPP2", "VPP3"
 ]
-
-NOISE_AREA_MM2 = 340 * 100        # 340 cm^2 = 34000 mm^2 (noise)
-SIGNAL_AREA_MM2 = 338 * 100      # 338 cm^2 = 33800 mm^2 (combined signal ROI, same as torso)
+NOISE_AREA_MM2 = 340 * 100  # 340 cm^2 = 34000 mm^2
 SIGNAL_RADIUS_MM = 3
 
 # Helper Functions
@@ -76,9 +74,7 @@ def compute_uniformity(signal_max: float, signal_min: float) -> float:
     return round(100.0 * (1 - ((signal_max - signal_min) / denom)), 1)
 
 def detect_circular_object(image):
-    h, w = image.shape
-    central = image[h//4:3*h//4, w//4:3*w//4]
-    threshold = 0.25 * np.max(central)
+    threshold = filters.threshold_otsu(image)
     binary_mask = image > threshold
     binary_mask = morphology.remove_small_objects(binary_mask, min_size=500)
     labeled_mask = measure.label(binary_mask)
@@ -91,17 +87,18 @@ def detect_circular_object(image):
     radius = np.sqrt(largest_region.area / np.pi)
     return int(center_y), int(center_x), int(radius)
 
-def create_circular_roi_nema_style(image, pixel_spacing, desired_area_mm2=SIGNAL_AREA_MM2, show_plot=False):
+def create_circular_roi_nema_style(image, pixel_spacing, desired_area_mm2=338*100, show_plot=False):
     height, width = image.shape
     x_spacing, y_spacing = pixel_spacing
     radius_mm = np.sqrt(desired_area_mm2 / np.pi)
     radius_pixels = max(1, round(radius_mm / x_spacing))
     center_y, center_x, object_radius = detect_circular_object(image)
+    center_y = min(center_y + 3, height - radius_pixels - 1)
     radius_pixels = min(radius_pixels, object_radius - 2)
     if radius_pixels < 1:
         logging.warning("Computed ROI radius is too small, defaulting to 1 pixel.")
         radius_pixels = 1
-    logging.debug(f"ROI: phantom center=({center_x},{center_y}), phantom_r={object_radius}, roi_r={radius_pixels}")
+    # Visualization removed for desktop app
     Y, X = np.ogrid[:height, :width]
     mask = ((X - center_x) ** 2 + (Y - center_y) ** 2) <= radius_pixels ** 2
     return mask.astype(np.uint8)
@@ -188,23 +185,17 @@ def classify_files(files: list) -> tuple:
                 if 'NORM' in types:
                     is_norm = True
 
-            if len(coil_labels) == 1:
+            if len(coil_labels) == 1 and coil_labels[0] in ELEMENT_LABELS:
                 elem = coil_labels[0]
-                if elem in ELEMENT_LABELS:
-                    ftype = 'noise' if 'noise' in series_desc or 'noise' in f.lower() else 'image'
-                    individual[(elem, ftype)] = f
-                    logging.debug(f"[Individual] {os.path.basename(f)} -> ({elem}, {ftype})")
-                else:
-                    logging.info(f"[Skip] single-element '{elem}' not in ELEMENT_LABELS: {os.path.basename(f)}")
+                ftype = 'noise' if 'noise' in series_desc or 'noise' in f.lower() else 'image'
+                individual[(elem, ftype)] = f
+                logging.debug(f"[Individual] {f} -> ({elem}, {ftype})")
             elif orientation:
                 ftype = 'noise' if 'noise' in series_desc or 'noise' in f.lower() else 'image'
-                key = (orientation, ftype, is_norm)
-                if key in combined:
-                    logging.warning(f"[Combined] OVERWRITING key {key}: was {os.path.basename(combined[key])}, now {os.path.basename(f)}")
-                combined[key] = f
-                logging.info(f"[Combined] {os.path.basename(f)} -> {key} | series='{series_desc}' | coils={coil_labels}")
+                combined[(orientation, ftype, is_norm)] = f
+                logging.debug(f"[Combined] {f} -> ({orientation}, {ftype}, norm={is_norm})")
             else:
-                logging.warning(f"Unclassified: {os.path.basename(f)} | series='{series_desc}' | coils={coil_labels}")
+                logging.warning(f"Unclassified file: {f}")
         except Exception as e:
             logging.error(f"Error reading {f}: {e}")
     return combined, individual
@@ -222,7 +213,7 @@ def save_mat_output(results_dir: str, coil_type: str, snr_list: list, piu_list: 
     sio.savemat(mat_path, mat_data)
     logging.info(f"Saved .mat to {mat_path}")
 
-def process_hn_folder(folder: str) -> tuple:
+def process_torso_folder(folder: str) -> tuple:
 
     dicom_files = []
     for root, _, files in os.walk(folder):
@@ -242,69 +233,61 @@ def process_hn_folder(folder: str) -> tuple:
     combined_results = []
     element_results = []
 
-    # Process combined views (same structure as torso):
-    # SNR: Norm-OFF signal mean / Norm-OFF noise std
-    # Uniformity + Max/Min: from Norm-ON image
-    # Displayed Signal Mean: Norm-OFF mean (used for SNR)
+    # Process combined views: SNR from Norm-off images; Uniformity from Norm-on images
     for orientation in ['sag', 'tra', 'cor']:
-        snr_key = (orientation, 'image', False)        # Norm-OFF for SNR signal
-        noise_key = (orientation, 'noise', False)       # Norm-OFF for noise
-        uniform_key = (orientation, 'image', True)      # Norm-ON for uniformity
+        snr_key = (orientation, 'image', False)
+        noise_key = (orientation, 'noise', False)
+        uniform_key = (orientation, 'image', True)
 
         if snr_key not in combined_files:
-            logging.warning(f"No Norm-OFF signal for {orientation.upper()}, skipping.")
-            logging.warning(f"  Available: {[k for k in combined_files if k[0]==orientation]}")
+            logging.warning(f"No SNR image for {orientation.upper()}, skipping.")
             continue
         if noise_key not in combined_files:
-            alt_noise_key = (orientation, 'noise', True)
-            if alt_noise_key in combined_files:
-                noise_key = alt_noise_key
-                logging.info(f"Using Norm-ON noise for {orientation.upper()} (Norm-OFF not found)")
-            else:
-                logging.warning(f"No noise for {orientation.upper()}, skipping.")
-                continue
+            logging.warning(f"No noise for {orientation.upper()}, skipping.")
+            continue
 
         signal_path = combined_files[snr_key]
         noise_path = combined_files[noise_key]
 
-        logging.info(f"Processing {orientation.upper()} SNR signal (Norm-OFF): {signal_path}")
-        logging.info(f"Processing {orientation.upper()} noise (Norm-OFF): {noise_path}")
+        logging.info(f"Processing {orientation.upper()} combined SNR image: {signal_path}")
         signal_image, signal_spacing = load_dicom_image(signal_path)
         noise_image, noise_spacing = load_dicom_image(noise_path)
 
-        # SNR from Norm-OFF
+        # SNR calculation using Norm-off (signal) and noise
         sig_mask = create_circular_roi_nema_style(signal_image, signal_spacing, show_plot=False)
         noise_mask = create_central_circle_roi(noise_image, noise_spacing, show_plot=False)
-        sig_mean = float(np.mean(signal_image[sig_mask == 1]))
+        sig_mean = float(np.mean(signal_image[sig_mask == 1]))  # only for SNR
         noise_std = float(np.std(noise_image[noise_mask == 1]))
         snr = compute_snr(sig_mean, noise_std)
 
-        # Uniformity from Norm-ON
+        # Uniformity and signal stats using Norm-on image
         if uniform_key in combined_files:
             uniform_path = combined_files[uniform_key]
-            logging.info(f"Processing {orientation.upper()} uniformity (Norm-ON): {uniform_path}")
+            logging.info(f"Processing {orientation.upper()} combined uniformity image: {uniform_path}")
             uniform_image, uniform_spacing = load_dicom_image(uniform_path)
             u_mask = create_circular_roi_nema_style(uniform_image, uniform_spacing, show_plot=False)
             u_sig_max, u_sig_min, u_sig_mean = compute_metrics(uniform_image, u_mask)
             uniformity = compute_uniformity(u_sig_max, u_sig_min)
         else:
-            logging.warning(f"No Norm-ON image for {orientation.upper()}, using Norm-OFF for uniformity.")
-            u_sig_max, u_sig_min, _ = compute_metrics(signal_image, sig_mask)
-            uniformity = compute_uniformity(u_sig_max, u_sig_min)
+            logging.warning(f"No uniformity image for {orientation.upper()}, setting uniformity=0.0 and signal stats to 0.")
+            uniformity = 0.0
+            u_sig_max = 0.0
+            u_sig_min = 0.0
+            u_sig_mean = 0.0
 
         combined_results.append({
             'Region': orientation.upper(),
             'Signal Max': u_sig_max,
             'Signal Min': u_sig_min,
-            'Signal Mean': sig_mean,
+            'Signal Mean': u_sig_mean,
             'Noise SD': noise_std,
             'SNR': snr,
             'Uniformity': uniformity
         })
-        logging.info(f"{orientation.upper()} - SNR: {snr}, Uniformity: {uniformity}, Max: {u_sig_max}, Min: {u_sig_min}, Mean: {sig_mean}, Noise SD: {noise_std}")
+        logging.info(f"{orientation.upper()} - SNR: {snr}, Uniformity: {uniformity}, Max: {u_sig_max}, Min: {u_sig_min}, Mean: {u_sig_mean}")
 
 
-    # Process individual elements (same as torso)
+    # Process individual elements (unchanged)
     for (elem, ftype), filepath in individual_files.items():
         if ftype != 'image':
             continue
@@ -345,13 +328,13 @@ def process_hn_folder(folder: str) -> tuple:
     return combined_results, element_results
 
 def main():
-    parser = argparse.ArgumentParser(description="Process Head & Neck DICOM metrics")
+    parser = argparse.ArgumentParser(description="Process Torso DICOM metrics")
     parser.add_argument("input_directory", type=str, help="Folder containing DICOM files")
-    parser.add_argument("--output", type=str, default="headneck_coil_analysis.xlsx", help="Excel output file")
+    parser.add_argument("--output", type=str, default="torso_coil_analysis.xlsx", help="Excel output file")
     parser.add_argument("--matdir", type=str, default=None, help="Directory to save .mat files")
     args = parser.parse_args()
 
-    logging.info(f"Starting head & neck analysis...")
+    logging.info(f"Starting torso analysis...")
     logging.info(f"Input directory: {args.input_directory}")
     logging.info(f"Output file: {args.output}")
 
@@ -362,7 +345,7 @@ def main():
         logging.info(f"Created output directory: {output_dir}")
 
     try:
-        combined, elements = process_hn_folder(args.input_directory)
+        combined, elements = process_torso_folder(args.input_directory)
         
         # ALWAYS create DataFrames and output file, even if empty
         if combined:
